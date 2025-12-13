@@ -1,6 +1,9 @@
 import OpenAI from 'openai';
 import { searchDocuments } from './rag';
 import { supabase } from './supabase';
+import { getRecentActivities, buildActivityContextForAI, LeadActivity } from './activityTrackingService';
+import { getCatalogContext } from './productRagService';
+import { getCurrentCart, buildCartContextForAI } from './cartContextService';
 
 const MAX_HISTORY = 10; // Reduced to prevent context overload
 
@@ -26,7 +29,7 @@ async function getBotSettings() {
 
         if (error) {
             console.error('Error fetching bot settings:', error);
-            return { bot_name: 'Assistant', bot_tone: 'helpful and professional' };
+            return { bot_name: 'Assistant', bot_tone: 'helpful and professional', ai_model: 'qwen/qwen3-235b-a22b' };
         }
 
         cachedSettings = data;
@@ -34,7 +37,7 @@ async function getBotSettings() {
         return data;
     } catch (error) {
         console.error('Error fetching bot settings:', error);
-        return { bot_name: 'Assistant', bot_tone: 'helpful and professional' };
+        return { bot_name: 'Assistant', bot_tone: 'helpful and professional', ai_model: 'qwen/qwen3-235b-a22b' };
     }
 }
 
@@ -204,6 +207,119 @@ function storeMessageAsync(senderId: string, role: 'user' | 'assistant', content
     })();
 }
 
+// Fetch the latest conversation summary for a sender
+export async function getLatestConversationSummary(senderId: string): Promise<string> {
+    try {
+        const { data, error } = await supabase
+            .from('conversation_summaries')
+            .select('summary')
+            .eq('sender_id', senderId)
+            .order('created_at', { ascending: false })
+            .limit(1)
+            .single();
+
+        if (error) {
+            return '';
+        }
+
+        return data?.summary || '';
+    } catch (error) {
+        console.error('Error fetching conversation summary:', error);
+        return '';
+    }
+}
+
+// Generate a new conversation summary (to be called periodically)
+export async function generateConversationSummary(senderId: string, leadId?: string): Promise<string | void> {
+    console.log(`Generating conversation summary for ${senderId}...`);
+    try {
+        // 1. Get last 20 messages
+        const { data: messages } = await supabase
+            .from('conversations')
+            .select('role, content')
+            .eq('sender_id', senderId)
+            .order('created_at', { ascending: false }) // Get newest first
+            .limit(20);
+
+        if (!messages || messages.length === 0) return;
+
+        // Reverse to chronological order for the AI
+        const history = messages.reverse().map(m => `${m.role.toUpperCase()}: ${m.content}`).join('\n');
+
+        // 2. Get recent activities (last 10)
+        const recentActivities = await getRecentActivities(senderId, 10);
+        const activityContext = buildActivityContextForAI(recentActivities);
+
+        // 3. Get previous summary
+        const previousSummary = await getLatestConversationSummary(senderId);
+
+        // Fetch settings for model
+        const settings = await getBotSettings();
+        const aiModel = settings.ai_model || "qwen/qwen3-235b-a22b";
+
+        // 4. Generate new summary using LLM
+        const prompt = `You are an expert conversation summarizer. Your goal is to create a concise but comprehensive summary of the customer's context.
+
+PREVIOUS CONTEXT:
+${previousSummary || 'None'}
+
+RECENT ACTIVITY:
+${activityContext || 'None'}
+
+RECENT CONVERSATION (Last 20 messages):
+${history}
+
+INSTRUCTIONS:
+Create a new summary that merges the Previous Context with new information from Recent Conversation and Activity.
+Key details to track:
+- Customer's name, preferences, budget, and specific interests (products/properties).
+- Any questions they asked that are still unresolved.
+- Verification status (payments, receipts).
+- Tone and sentiment.
+- Key milestones (ordered, booked appointment, etc.).
+
+OUTPUT:
+Return ONLY the summary text. Do not add "Here is the summary" or other filler.`;
+
+        const completion = await client.chat.completions.create({
+            model: aiModel,
+            messages: [{ role: 'user', content: prompt }],
+            temperature: 0.3,
+            max_tokens: 512,
+        });
+
+        const newSummary = completion.choices[0]?.message?.content || '';
+        console.log('Generated summary:', newSummary);
+
+        if (newSummary) {
+            // 5. Save new summary
+            const { error: insertError } = await supabase
+                .from('conversation_summaries')
+                .insert({
+                    sender_id: senderId,
+                    summary: newSummary,
+                    meta: {
+                        messages_analyzed: messages.length,
+                        has_lead_id: !!leadId
+                    }
+                });
+
+            if (insertError) {
+                console.error('Error saving conversation summary:', insertError);
+                throw insertError;
+            }
+
+            console.log('✅ New conversation summary generated and saved.');
+        }
+
+        return newSummary;
+
+    } catch (error) {
+        console.error('Error generating conversation summary:', error);
+        throw error; // Rethrow to allow caller to handle/see it
+    }
+}
+
 // Image context type for passing image analysis to the chatbot
 export interface ImageContext {
     isReceipt: boolean;
@@ -243,20 +359,52 @@ export async function getBotResponse(
     }
 
     // Run independent operations in PARALLEL
-    const [rules, history, context, instructions] = await Promise.all([
+    const results = await Promise.all([
         getBotRules(),
         getConversationHistory(senderId),
         searchDocuments(userMessage),
         getBotInstructions(),
+        getRecentActivities(senderId, 5), // Get last 5 activities for context
+        getCatalogContext(), // Get products, properties, payment methods
+        getLatestConversationSummary(senderId), // Get long-term context summary
+        getCurrentCart(senderId), // Get current cart status
     ]);
 
-    console.log(`Parallel fetch took ${Date.now() - startTime}ms - rules: ${rules.length}, history: ${history.length}, isPaymentQuery: ${isPaymentRelated}`);
+    // Deference the promise results correctly (added summary and cart)
+    const [rules, history, context, instructions, activities, catalogContext] = results.slice(0, 6) as [string[], { role: string; content: string }[], string, string, LeadActivity[], string];
+    const summary = results[6] as string;
+    const cart = results[7] as Awaited<ReturnType<typeof getCurrentCart>>;
+
+    console.log(`Parallel fetch took ${Date.now() - startTime}ms - rules: ${rules.length}, history: ${history.length}, activities: ${activities.length}, catalog: ${catalogContext.length} chars, isPaymentQuery: ${isPaymentRelated}, summary len: ${summary.length}, cart items: ${cart?.item_count || 0}`);
     console.log('[RAG CONTEXT]:', context ? context.substring(0, 500) + '...' : 'NO CONTEXT RETRIEVED');
+
 
     // Build a clear system prompt optimized for Llama 3.1
     let systemPrompt = `You are ${botName}, a friendly Filipino salesperson. Your style: ${botTone}.
 
 STYLE: Use Taglish, keep messages short, use 1-2 emojis max.
+
+UI TOOLS (Use these tags when relevant):
+- [SHOW_PRODUCTS] : When user asks to see items/products or looking for recommendations.
+- [SHOW_PROPERTIES] : When user asks about houses, lots, or properties for sale/rent.
+- [SHOW_BOOKING] : When user wants to schedule a visit, appointment, or consultation.
+- [SHOW_PAYMENT_METHODS] : When user asks how to pay or asks for bank details.
+- [SHOW_CART] : When user asks to see their cart, order, or what they've added. Example: "ano na sa cart ko?" / "what's in my cart?"
+- [REMOVE_CART:product_name] : When user wants to REMOVE an item from their cart. Replace "product_name" with the actual product name they want removed.
+
+IMPORTANT: 
+- Answer the user's question FIRST, then add the appropriate tag at the end.
+- You can recommend checking products/properties if it fits the conversation.
+- Example 1: "Yes, meron kaming available. Check mo dito: [SHOW_PRODUCTS]"
+- Example 2: "Pwede tayo mag-schedule ng tripping. [SHOW_BOOKING]"
+- Example 3 (remove from cart): "Okay po, aalisin ko na yan sa cart mo. [REMOVE_CART:Product Name Here]"
+- Example 4 (show cart): "Eto po yung laman ng cart mo: [SHOW_CART]"
+
+CART REMOVAL DETECTION:
+When a customer says things like:
+- "wag na po yung..." / "alisin mo na yung..." / "remove..." / "tanggalin..."
+- "ayoko na ng..." / "cancel ko yung..."
+Use the [REMOVE_CART:product_name] tag with the product name they mentioned.
 
 `;
 
@@ -269,6 +417,15 @@ STYLE: Use Taglish, keep messages short, use 1-2 emojis max.
 
     if (rules.length > 0) {
         systemPrompt += `RULES:\n${rules.join('\n')}\n\n`;
+    }
+
+    // Add product/property catalog context
+    if (catalogContext && catalogContext.trim().length > 0) {
+        systemPrompt += `${catalogContext}
+
+IMPORTANT: Use the EXACT prices and details from the catalog above when answering customer questions about products, properties, or payment methods.
+
+`;
     }
 
     // Add knowledge base FIRST with clear instruction
@@ -286,16 +443,38 @@ Do NOT make up prices or add details not in the reference data.
 `;
     }
 
-    // Add payment methods if this is a payment query
+    // Add payment methods details for specific questions
     if (paymentMethodsContext) {
         systemPrompt += `${paymentMethodsContext}
 
 INSTRUCTION FOR PAYMENT QUERIES:
-- List ALL available payment methods from above
-- Include account name and number for each
-- Be clear and helpful about how to pay
-- If they ask for QR code, tell them it's available and they can ask you to show it
+- Explain the options briefly if asked.
+- Add [SHOW_PAYMENT_METHODS] tag to show the full list UI.
 
+`;
+    }
+
+    // Add Long-Term Context Summary (Memory)
+    if (summary && summary.trim().length > 0) {
+        systemPrompt += `LONG TERM MEMORY (Customer Context):
+${summary}
+
+IMPORTANT: Use this context to remember what the customer previously said, their name, preferences, and past actions.
+`;
+    }
+
+
+    // Add customer activity history context
+    const activityContext = buildActivityContextForAI(activities);
+    if (activityContext) {
+        systemPrompt += `${activityContext}
+`;
+    }
+
+    // Add current cart context
+    const cartContext = buildCartContextForAI(cart);
+    if (cartContext) {
+        systemPrompt += `${cartContext}
 `;
     }
 
@@ -343,7 +522,7 @@ INSTRUCTION: The payment details MATCH our records! Thank the customer warmly, c
                 systemPrompt += `
 ⚠️ PAYMENT MISMATCH: ${imageContext.verificationDetails}
 
-INSTRUCTION: Politely inform the customer that the payment details don't match our records. Ask them to double-check if they sent to the correct account. Provide our correct payment details. Be helpful and understanding - maybe they made an honest mistake.
+INSTRUCTION: Politely inform the customer that the payment details don't match our records. Ask them to double-check if they sent to the correct account. Provide our correct payment details (use [SHOW_PAYMENT_METHODS] if helpful). Be helpful and understanding - maybe they made an honest mistake.
 
 `;
             } else {
@@ -396,16 +575,26 @@ INSTRUCTION: Respond naturally about the image. If they might be trying to send 
     try {
         const llmStart = Date.now();
 
-        // Use Qwen3-235b model
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const stream: any = await client.chat.completions.create({
-            model: "qwen/qwen3-235b-a22b",
+        // Use selected model or default to Qwen
+        const aiModel = settings.ai_model || "qwen/qwen3-235b-a22b";
+
+        // Prepare completion options
+        const completionOptions: OpenAI.Chat.ChatCompletionCreateParams & { chat_template_kwargs?: { thinking: boolean } } = {
+            model: aiModel,
             messages,
-            temperature: 0.3,  // Low for accuracy
+            temperature: 0.3,
             top_p: 0.7,
             max_tokens: 1024,
             stream: true,
-        });
+        };
+
+        // Add DeepSeek specific options if selected
+        if (aiModel.includes('deepseek')) {
+            completionOptions.chat_template_kwargs = { "thinking": true };
+            completionOptions.max_tokens = 8192; // DeepSeek supports larger context
+        }
+
+        const stream = await client.chat.completions.create(completionOptions as OpenAI.Chat.ChatCompletionCreateParams) as AsyncIterable<OpenAI.Chat.ChatCompletionChunk>;
 
         let responseContent = '';
         let reasoningContent = '';

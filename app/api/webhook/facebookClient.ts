@@ -3,6 +3,151 @@ import type { PaymentMethod, Product, Property } from './data';
 
 const DEFAULT_APP_URL = process.env.NEXT_PUBLIC_BASE_URL || process.env.NEXT_PUBLIC_APP_URL || 'https://aphelion-photon.vercel.app';
 
+// Send appointment booking card with button to open calendar
+export async function sendAppointmentCard(sender_psid: string, pageId?: string) {
+    const PAGE_ACCESS_TOKEN = await getPageToken(pageId);
+    if (!PAGE_ACCESS_TOKEN) return false;
+
+    // Build the booking URL with the user's PSID and Page ID
+    let bookingUrl = `${DEFAULT_APP_URL}/book?psid=${encodeURIComponent(sender_psid)}`;
+    if (pageId) {
+        bookingUrl += `&pageId=${encodeURIComponent(pageId)}`;
+    }
+
+    const requestBody = {
+        messaging_type: 'RESPONSE',
+        recipient: { id: sender_psid },
+        message: {
+            attachment: {
+                type: 'template',
+                payload: {
+                    template_type: 'generic',
+                    elements: [{
+                        title: '📅 Book an Appointment',
+                        subtitle: 'Choose a convenient date and time that works for you. Click below to view available slots.',
+                        buttons: [
+                            {
+                                type: 'web_url',
+                                url: bookingUrl,
+                                title: '🗓️ Book Now',
+                                webview_height_ratio: 'tall'
+                            }
+                        ]
+                    }]
+                }
+            }
+        }
+    };
+
+    console.log('Sending appointment card:', JSON.stringify(requestBody, null, 2));
+
+    try {
+        const res = await fetch(
+            `https://graph.facebook.com/v21.0/me/messages?access_token=${PAGE_ACCESS_TOKEN}`,
+            {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(requestBody),
+            }
+        );
+
+        const resData = await res.json();
+        if (!res.ok) {
+            console.error('Failed to send appointment card:', resData);
+            return false;
+        }
+
+        console.log('Appointment card sent successfully');
+        return true;
+    } catch (error) {
+        console.error('Error sending appointment card:', error);
+        return false;
+    }
+}
+
+// Send cancellation confirmation request to Messenger
+export async function sendCancellationConfirmation(
+    sender_psid: string,
+    appointmentId: string,
+    appointmentDate: string,
+    appointmentTime: string,
+    pageId?: string
+): Promise<boolean> {
+    const PAGE_ACCESS_TOKEN = await getPageToken(pageId);
+    if (!PAGE_ACCESS_TOKEN) return false;
+
+    const requestBody = {
+        messaging_type: 'RESPONSE',
+        recipient: { id: sender_psid },
+        message: {
+            attachment: {
+                type: 'template',
+                payload: {
+                    template_type: 'button',
+                    text: `⚠️ Cancellation Request\n\nSomeone is trying to cancel your appointment on ${appointmentDate} at ${appointmentTime}.\n\nIf this was you, please confirm below:`,
+                    buttons: [
+                        {
+                            type: 'postback',
+                            title: '✅ Confirm Cancel',
+                            payload: `CANCEL_APT_CONFIRM_${appointmentId}`
+                        },
+                        {
+                            type: 'postback',
+                            title: '❌ Keep Appointment',
+                            payload: `CANCEL_APT_KEEP_${appointmentId}`
+                        }
+                    ]
+                }
+            }
+        }
+    };
+
+    console.log('Sending cancellation confirmation:', JSON.stringify(requestBody, null, 2));
+
+    try {
+        const res = await fetch(
+            `https://graph.facebook.com/v21.0/me/messages?access_token=${PAGE_ACCESS_TOKEN}`,
+            {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(requestBody),
+            }
+        );
+
+        const resData = await res.json();
+        if (!res.ok) {
+            console.error('Failed to send cancellation confirmation:', resData);
+            return false;
+        }
+
+        console.log('Cancellation confirmation sent successfully');
+        return true;
+    } catch (error) {
+        console.error('Error sending cancellation confirmation:', error);
+        return false;
+    }
+}
+
+export async function getUserProfile(sender_psid: string, pageId?: string) {
+    const PAGE_ACCESS_TOKEN = await getPageToken(pageId);
+    if (!PAGE_ACCESS_TOKEN) return null;
+
+    try {
+        const res = await fetch(
+            `https://graph.facebook.com/v21.0/${sender_psid}?fields=first_name,last_name,profile_pic,name&access_token=${PAGE_ACCESS_TOKEN}`
+        );
+        const data = await res.json();
+        if (data.error) {
+            console.error('Error fetching user profile:', data.error);
+            return null;
+        }
+        return data;
+    } catch (error) {
+        console.error('Error fetching user profile:', error);
+        return null;
+    }
+}
+
 // Send products as Facebook Generic Template cards
 export async function sendProductCards(sender_psid: string, products: Product[], pageId?: string) {
     const PAGE_ACCESS_TOKEN = await getPageToken(pageId);
@@ -34,18 +179,30 @@ export async function sendProductCards(sender_psid: string, products: Product[],
             element.image_url = product.image_url;
         }
 
+        // Build product URL with PSID for user tracking
+        let productUrl = `${DEFAULT_APP_URL}/product/${product.id}?psid=${encodeURIComponent(sender_psid)}`;
+        if (pageId) {
+            productUrl += `&pageId=${encodeURIComponent(pageId)}`;
+        }
+
         // Add buttons
         element.buttons = [
             {
                 type: 'web_url',
-                url: `${DEFAULT_APP_URL}/product/${product.id}`,
+                url: productUrl,
                 title: 'View Product',
                 webview_height_ratio: 'tall'
+            },
+            {
+                type: 'postback',
+                title: '🛒 Add to Cart',
+                payload: `ADD_TO_CART_${product.id}`
             }
         ];
 
         return element;
     });
+
 
     const requestBody = {
         messaging_type: 'RESPONSE',

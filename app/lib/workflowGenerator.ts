@@ -20,9 +20,11 @@ export interface WorkflowNode {
         messageText?: string;
         // Trigger node fields
         triggerStageId?: string;
+        triggerType?: 'stage_change' | 'appointment_booked';
         // Wait node fields
         duration?: string;
         unit?: 'minutes' | 'hours' | 'days';
+        waitMode?: 'duration' | 'before_appointment';
         // Smart condition fields
         conditionType?: 'has_replied' | 'ai_rule';
         conditionRule?: string;
@@ -100,12 +102,24 @@ OUTPUT FORMAT: You MUST respond with ONLY valid JSON (no markdown, no explanatio
   "edges": [...]
 }
 
+AVAILABLE TRIGGER TYPES:
+1. "stage_change" - Triggers when lead enters a pipeline stage. Fields: { type: "trigger", triggerType: "stage_change", triggerStageId, label, description }
+2. "appointment_booked" - Triggers when customer books an appointment. Fields: { type: "trigger", triggerType: "appointment_booked", label, description }
+
 AVAILABLE NODE TYPES:
-1. "trigger" - Starting point. Always use as first node. Fields: { type: "trigger", label, description, triggerStageId }
+1. "trigger" - Starting point. Always use as first node.
 2. "message" - Send a message. Fields: { type: "message", label, description, messageMode: "custom"|"ai", messageText }
-3. "wait" - Delay before next step. Fields: { type: "wait", label, description, duration: "5", unit: "minutes"|"hours"|"days" }
+3. "wait" - Delay before next step. Two modes:
+   - Duration mode: { type: "wait", waitMode: "duration", duration: "5", unit: "minutes"|"hours"|"days" }
+   - Before Appointment mode (only for appointment_booked trigger): { type: "wait", waitMode: "before_appointment", duration: "1", unit: "days"|"hours"|"minutes" } - schedules message X time BEFORE the appointment
 4. "smart_condition" - Branch logic. Fields: { type: "smart_condition", label, description, conditionType: "has_replied"|"ai_rule", conditionRule }
 5. "stop_bot" - End workflow. Fields: { type: "stop_bot", label, description, reason }
+
+APPOINTMENT WORKFLOW DESIGN RULES:
+- When creating appointment reminder workflows, use triggerType: "appointment_booked"
+- Use waitMode: "before_appointment" to schedule messages BEFORE the appointment (e.g., 1 day before, 1 hour before, 10 minutes before)
+- Typical reminder sequence: 1 day before -> 1 hour before -> 10 minutes before
+- Example: { type: "wait", label: "1 Day Before", waitMode: "before_appointment", duration: "1", unit: "days" }
 
 DESIGN RULES FOR "LONGER WORKFLOWS":
 - Unless explicitly asked for a "simple" workflow, always create a MULTI-STEP sequence.
@@ -139,60 +153,41 @@ POSITIONING RULES:
 - For branches (smart_condition): true path goes left (x:100), false path goes right (x:400)
 - Merge branches back to center (x:250) after
 
-EXAMPLE PROMPT: "Create a follow-up sequence for New Lead Stage"
-
-OUTPUT FORMAT: You MUST respond with ONLY valid JSON (no markdown, no explanation). The JSON structure:
-{
-  "name": "Workflow Name",
-  "nodes": [...],
-  "edges": [...]
-}
-
-AVAILABLE NODE TYPES:
-1. "trigger" - Starting point. Always use as first node. Fields: { type: "trigger", label, description, triggerStageId }
-2. "message" - Send a message. Fields: { type: "message", label, description, messageMode: "custom"|"ai", messageText }
-3. "wait" - Delay before next step. Fields: { type: "wait", label, description, duration: "5", unit: "minutes"|"hours"|"days" }
-4. "smart_condition" - Branch logic. Fields: { type: "smart_condition", label, description, conditionType: "has_replied"|"ai_rule", conditionRule }
-5. "stop_bot" - End workflow. Fields: { type: "stop_bot", label, description, reason }
-
-NODE STRUCTURE:
-{
-  "id": "unique_id",
-  "type": "custom",
-  "position": { "x": number, "y": number },
-  "data": { "type": "...", "label": "...", ... }
-}
-
-EDGE STRUCTURE:
-{
-  "id": "edge_id",
-  "source": "source_node_id",
-  "target": "target_node_id",
-  "sourceHandle": null (or "true"/"false" for smart_condition branches),
-  "animated": true,
-  "style": { "stroke": "#94a3b8", "strokeWidth": 2 }
-}
-
-POSITIONING RULES:
-- Start trigger at x:250, y:50
-- Space nodes vertically by 150px
-- For branches (smart_condition): true path goes left (x:100), false path goes right (x:400)
-- Merge branches back to center (x:250) after
-
-EXAMPLE PROMPT: "Create a follow-up sequence for New Lead Stage"
-EXAMPLE OUTPUT:
+EXAMPLE 1 - Stage-based workflow:
+Prompt: "Create a follow-up sequence for New Lead Stage"
+Output:
 {
   "name": "New Lead Follow-up",
   "nodes": [
-    {"id":"1","type":"custom","position":{"x":250,"y":50},"data":{"type":"trigger","label":"New Lead Stage","description":"Triggered when lead enters New Lead stage"}},
-    {"id":"2","type":"custom","position":{"x":250,"y":200},"data":{"type":"message","label":"Initial Hello","description":"First contact","messageMode":"custom","messageText":"Hey! 👋 Saw you checking us out. Quick question - what caught your attention?"}},
-    {"id":"3","type":"custom","position":{"x":250,"y":350},"data":{"type":"wait","label":"Wait 1 Hour","description":"Give time to respond","duration":"1","unit":"hours"}},
-    {"id":"4","type":"custom","position":{"x":250,"y":500},"data":{"type":"smart_condition","label":"Did they reply?","description":"Check for response","conditionType":"has_replied"}}
+    {"id":"1","type":"custom","position":{"x":250,"y":50},"data":{"type":"trigger","triggerType":"stage_change","label":"New Lead Stage","description":"Triggered when lead enters New Lead stage"}},
+    {"id":"2","type":"custom","position":{"x":250,"y":200},"data":{"type":"message","label":"Initial Hello","messageMode":"custom","messageText":"Hey! 👋 Saw you checking us out. Quick question - what caught your attention?"}},
+    {"id":"3","type":"custom","position":{"x":250,"y":350},"data":{"type":"wait","label":"Wait 1 Hour","waitMode":"duration","duration":"1","unit":"hours"}},
+    {"id":"4","type":"custom","position":{"x":250,"y":500},"data":{"type":"smart_condition","label":"Did they reply?","conditionType":"has_replied"}}
   ],
   "edges": [
     {"id":"e1","source":"1","target":"2","animated":true,"style":{"stroke":"#94a3b8","strokeWidth":2}},
     {"id":"e2","source":"2","target":"3","animated":true,"style":{"stroke":"#94a3b8","strokeWidth":2}},
     {"id":"e3","source":"3","target":"4","animated":true,"style":{"stroke":"#94a3b8","strokeWidth":2}}
+  ]
+}
+
+EXAMPLE 2 - Appointment reminder workflow:
+Prompt: "Create appointment reminders"
+Output:
+{
+  "name": "Appointment Reminders",
+  "nodes": [
+    {"id":"1","type":"custom","position":{"x":250,"y":50},"data":{"type":"trigger","triggerType":"appointment_booked","label":"Appointment Booked","description":"Triggered when customer books an appointment"}},
+    {"id":"2","type":"custom","position":{"x":250,"y":200},"data":{"type":"wait","label":"1 Day Before","waitMode":"before_appointment","duration":"1","unit":"days"}},
+    {"id":"3","type":"custom","position":{"x":250,"y":350},"data":{"type":"message","label":"Day Before Reminder","messageMode":"custom","messageText":"Hi! 👋 Just a friendly reminder - your appointment is tomorrow. See you then!"}},
+    {"id":"4","type":"custom","position":{"x":250,"y":500},"data":{"type":"wait","label":"1 Hour Before","waitMode":"before_appointment","duration":"1","unit":"hours"}},
+    {"id":"5","type":"custom","position":{"x":250,"y":650},"data":{"type":"message","label":"Hour Before Reminder","messageMode":"custom","messageText":"Your appointment is in 1 hour! 🕐 We're excited to see you soon."}}
+  ],
+  "edges": [
+    {"id":"e1","source":"1","target":"2","animated":true,"style":{"stroke":"#94a3b8","strokeWidth":2}},
+    {"id":"e2","source":"2","target":"3","animated":true,"style":{"stroke":"#94a3b8","strokeWidth":2}},
+    {"id":"e3","source":"3","target":"4","animated":true,"style":{"stroke":"#94a3b8","strokeWidth":2}},
+    {"id":"e4","source":"4","target":"5","animated":true,"style":{"stroke":"#94a3b8","strokeWidth":2}}
   ]
 }`;
 

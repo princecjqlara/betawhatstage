@@ -1,5 +1,5 @@
 import { supabase } from './supabase';
-import { sendMessengerMessage, disableBotForLead } from './messengerService';
+import { sendMessengerMessage, sendMessengerAttachment, disableBotForLead, type AttachmentType } from './messengerService';
 import { getBotResponse } from './chatService';
 
 interface WorkflowNode {
@@ -31,14 +31,30 @@ interface ExecutionContext {
     senderId: string;
     conversationHistory?: string;
     lastMessageTime?: Date;
+    // Appointment-triggered workflow fields
+    appointmentId?: string;
+    appointmentDateTime?: Date;  // Combined date + start_time
+}
+
+interface ExecuteWorkflowOptions {
+    skipPublishCheck?: boolean;
+    appointmentId?: string;
+    appointmentDateTime?: Date;
 }
 
 export async function executeWorkflow(
     workflowId: string,
     leadId: string,
     senderId: string,
-    skipPublishCheck: boolean = false
+    skipPublishCheckOrOptions: boolean | ExecuteWorkflowOptions = false
 ): Promise<void> {
+    // Support both old signature (boolean) and new signature (options object)
+    const options: ExecuteWorkflowOptions = typeof skipPublishCheckOrOptions === 'boolean'
+        ? { skipPublishCheck: skipPublishCheckOrOptions }
+        : skipPublishCheckOrOptions;
+
+    const skipPublishCheck = options.skipPublishCheck ?? false;
+
     console.log(`Starting workflow ${workflowId} for lead ${leadId}`);
 
     // Get workflow data
@@ -87,6 +103,7 @@ export async function executeWorkflow(
             current_node_id: triggerNode.id,
             execution_data: { senderId },
             status: 'pending',
+            appointment_id: options?.appointmentId || null,
         })
         .select()
         .single();
@@ -103,8 +120,16 @@ export async function executeWorkflow(
 
     console.log('Execution record created:', execution.id);
 
+    // Build execution context
+    const context: ExecutionContext = {
+        leadId,
+        senderId,
+        appointmentId: options?.appointmentId,
+        appointmentDateTime: options?.appointmentDateTime,
+    };
+
     // Start executing from trigger
-    await continueExecution(execution.id, workflowData, { leadId, senderId });
+    await continueExecution(execution.id, workflowData, context);
 }
 
 export async function continueExecution(
@@ -198,6 +223,7 @@ async function executeNode(
         case 'message':
             const messageMode = node.data.messageMode || 'custom';
             let messageText = node.data.messageText || node.data.label || 'Hello!';
+            const imageUrl = node.data.imageUrl;
 
             if (messageMode === 'ai') {
                 // Generate AI message based on prompt + conversation context
@@ -230,28 +256,68 @@ Respond with ONLY the message text to send, nothing else. Keep it natural and co
                 }
             }
 
-            await sendMessengerMessage(
-                context.senderId,
-                messageText,
-                { messagingType: 'MESSAGE_TAG', tag: 'ACCOUNT_UPDATE' }
-            );
+            // Send attachment first if present (image, video, audio, or file)
+            if (imageUrl) {
+                const attachmentType = (node.data.attachmentType as AttachmentType) || 'image';
+                await sendMessengerAttachment(
+                    context.senderId,
+                    imageUrl,
+                    attachmentType,
+                    { messagingType: 'MESSAGE_TAG', tag: 'ACCOUNT_UPDATE' }
+                );
+            }
+
+            // Send text message (if there's any text to send)
+            if (messageText && messageText.trim()) {
+                await sendMessengerMessage(
+                    context.senderId,
+                    messageText,
+                    { messagingType: 'MESSAGE_TAG', tag: 'ACCOUNT_UPDATE' }
+                );
+            }
             return getNextNode(node.id, workflowData);
 
         case 'wait':
-            // Schedule execution for later
+            // Check wait mode: 'duration' (default) or 'before_appointment'
+            const waitMode = node.data.waitMode || 'duration';
             const duration = parseInt(node.data.duration || '5');
             const unit = node.data.unit || 'minutes';
-            const delayMs = unit === 'hours' ? duration * 3600000 :
-                unit === 'days' ? duration * 86400000 :
-                    duration * 60000; // minutes
 
-            const scheduledFor = new Date(Date.now() + delayMs);
+            let scheduledFor: Date;
+
+            if (waitMode === 'before_appointment' && context.appointmentDateTime) {
+                // Schedule relative to appointment time (e.g., "1 day before")
+                const offsetMs = unit === 'hours' ? duration * 3600000 :
+                    unit === 'days' ? duration * 86400000 :
+                        duration * 60000; // minutes
+
+                scheduledFor = new Date(context.appointmentDateTime.getTime() - offsetMs);
+
+                // Don't schedule if the time has already passed
+                if (scheduledFor.getTime() <= Date.now()) {
+                    console.log('Scheduled time has passed, skipping to next node');
+                    return getNextNode(node.id, workflowData);
+                }
+            } else {
+                // Default: schedule for duration from now
+                const delayMs = unit === 'hours' ? duration * 3600000 :
+                    unit === 'days' ? duration * 86400000 :
+                        duration * 60000; // minutes
+
+                scheduledFor = new Date(Date.now() + delayMs);
+            }
 
             await supabase
                 .from('workflow_executions')
                 .update({
                     scheduled_for: scheduledFor.toISOString(),
                     current_node_id: getNextNode(node.id, workflowData),
+                    // Store appointment context for cron to use when resuming
+                    execution_data: {
+                        senderId: context.senderId,
+                        appointmentId: context.appointmentId,
+                        appointmentDateTime: context.appointmentDateTime?.toISOString(),
+                    },
                 })
                 .eq('id', executionId);
 
@@ -398,6 +464,69 @@ export async function triggerWorkflowsForStage(stageId: string, leadId: string):
         console.log(`Executing workflow: ${workflow.name} (${workflow.id})`);
         // Skip publish check since we already filtered for published workflows
         await executeWorkflow(workflow.id, leadId, lead.sender_id, true);
+    }
+}
+
+/**
+ * Trigger workflows when an appointment is booked
+ * Schedules messages relative to the appointment time (e.g., 1 day before, 1 hour before)
+ */
+export async function triggerWorkflowsForAppointment(
+    appointmentId: string,
+    senderId: string,
+    appointmentDate: string,  // YYYY-MM-DD format
+    startTime: string         // HH:mm:ss format
+): Promise<void> {
+    console.log(`Checking workflows for appointment ${appointmentId}`);
+
+    // Find workflows with appointment_booked trigger
+    const { data: workflows, error: workflowError } = await supabase
+        .from('workflows')
+        .select('*')
+        .eq('trigger_type', 'appointment_booked')
+        .eq('is_published', true);
+
+    if (workflowError) {
+        console.error('Error fetching appointment workflows:', workflowError);
+        return;
+    }
+
+    if (!workflows || workflows.length === 0) {
+        console.log('No appointment-triggered workflows found');
+        return;
+    }
+
+    console.log(`Found ${workflows.length} appointment workflows to trigger:`, workflows.map(w => w.name));
+
+    // Get lead from sender_id
+    const { data: lead, error: leadError } = await supabase
+        .from('leads')
+        .select('id')
+        .eq('sender_id', senderId)
+        .single();
+
+    if (leadError || !lead) {
+        console.error('Lead not found for sender:', senderId);
+        return;
+    }
+
+    // Parse appointment datetime
+    // appointmentDate is YYYY-MM-DD, startTime is HH:mm:ss
+    const [year, month, day] = appointmentDate.split('-').map(Number);
+    const [hours, minutes] = startTime.split(':').map(Number);
+    const appointmentDateTime = new Date(year, month - 1, day, hours, minutes);
+
+    console.log('Appointment datetime:', appointmentDateTime.toISOString());
+
+    // Execute each workflow
+    for (const workflow of workflows) {
+        console.log(`Executing appointment workflow: ${workflow.name} (${workflow.id})`);
+
+        await executeWorkflow(workflow.id, lead.id, senderId, {
+            skipPublishCheck: true,
+            appointmentId,
+            appointmentDateTime,
+        });
     }
 }
 

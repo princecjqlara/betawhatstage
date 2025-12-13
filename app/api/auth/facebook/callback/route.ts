@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server';
+import { storeAuthSession } from '@/app/lib/authSession';
 
 // Facebook OAuth configuration
 const FACEBOOK_APP_ID = process.env.FACEBOOK_APP_ID;
@@ -87,6 +88,9 @@ export async function GET(req: Request) {
         const pagesResponse = await fetch(pagesUrl.toString());
         const pagesData = await pagesResponse.json();
 
+        console.log('=== Facebook Pages API Response ===');
+        console.log(`Found ${pagesData.data?.length || 0} pages`);
+
         if (pagesData.error) {
             console.error('Pages fetch error:', pagesData.error);
             throw new Error(pagesData.error.message || 'Failed to fetch pages');
@@ -94,7 +98,7 @@ export async function GET(req: Request) {
 
         const pages: FacebookPage[] = pagesData.data || [];
 
-        // Encode pages data for URL (will be stored in session/displayed in UI)
+        // Build pages payload
         const pagesPayload = pages.map((page: FacebookPage) => ({
             id: page.id,
             name: page.name,
@@ -102,13 +106,13 @@ export async function GET(req: Request) {
             picture: page.picture?.data?.url || null,
         }));
 
-        // Store pages in a temporary way - using URL params for simplicity
-        // In production, you might want to use a server-side session or encrypted cookie
-        const encodedPages = encodeURIComponent(JSON.stringify(pagesPayload));
+        // Store pages in server-side session (avoids cookie size limits)
+        const sessionId = storeAuthSession(pagesPayload);
+        console.log(`Stored ${pagesPayload.length} pages in session: ${sessionId}`);
 
         const redirectUrl = new URL('/settings', process.env.NEXT_PUBLIC_BASE_URL || 'http://localhost:3000');
-        redirectUrl.searchParams.set('facebook_pages', encodedPages);
         redirectUrl.searchParams.set('success', 'true');
+        redirectUrl.searchParams.set('fb_session', sessionId);
 
         return NextResponse.redirect(redirectUrl.toString());
 

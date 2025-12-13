@@ -9,8 +9,10 @@ import {
     Kanban,
     Workflow,
     Store,
+    ShoppingBag,
     ChevronLeft,
-    ChevronRight
+    ChevronRight,
+    Calendar
 } from 'lucide-react';
 
 import Link from 'next/link';
@@ -27,6 +29,8 @@ export default function Sidebar() {
         { icon: LayoutGrid, href: '/', label: 'Dashboard' },
         { icon: Kanban, href: '/pipeline', label: 'Pipeline' },
         { icon: Store, href: '/store', label: 'Store' },
+        { icon: ShoppingBag, href: '/orders', label: 'Orders' },
+        { icon: Calendar, href: '/appointments', label: 'Appointments' },
         { icon: Workflow, href: '/workflows', label: 'Workflows' },
         { icon: Settings, href: '/settings', label: 'Settings' },
     ];

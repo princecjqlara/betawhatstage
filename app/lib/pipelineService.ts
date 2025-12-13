@@ -19,6 +19,9 @@ interface Lead {
     current_stage_id: string | null;
     message_count: number;
     last_analyzed_at: string | null;
+    email: string | null;
+    phone: string | null;
+    goal_met_at: string | null;
 }
 
 interface PipelineStage {
@@ -513,6 +516,104 @@ export async function moveLeadToReceiptStage(leadId: string, receiptImageUrl: st
         return true;
     } catch (error) {
         console.error('Error in moveLeadToReceiptStage:', error);
+        return false;
+    }
+}
+
+// Move a lead to the "Appointment Scheduled" stage when an appointment is booked
+export async function moveLeadToAppointmentStage(
+    senderId: string,
+    appointmentDetails: { appointmentId: string; appointmentDate: string; startTime: string }
+): Promise<boolean> {
+    try {
+        // Get lead by sender_id
+        const { data: lead } = await supabase
+            .from('leads')
+            .select('id, current_stage_id')
+            .eq('sender_id', senderId)
+            .single();
+
+        if (!lead) {
+            console.log('Lead not found for sender:', senderId);
+            return false;
+        }
+
+        // Find or create the "Appointment Scheduled" stage
+        let { data: appointmentStage } = await supabase
+            .from('pipeline_stages')
+            .select('id')
+            .eq('name', 'Appointment Scheduled')
+            .single();
+
+        // If "Appointment Scheduled" stage doesn't exist, create it
+        if (!appointmentStage) {
+            const { data: newStage, error: createError } = await supabase
+                .from('pipeline_stages')
+                .insert({
+                    name: 'Appointment Scheduled',
+                    display_order: 2,
+                    color: '#8b5cf6', // Purple color
+                    description: 'Customer has booked an appointment',
+                })
+                .select()
+                .single();
+
+            if (createError) {
+                console.error('Error creating Appointment Scheduled stage:', createError);
+                return false;
+            }
+            appointmentStage = newStage;
+        }
+
+        if (!appointmentStage) {
+            console.error('Appointment Scheduled stage not available');
+            return false;
+        }
+
+        // Only update if not already in Appointment Scheduled stage
+        if (lead.current_stage_id === appointmentStage.id) {
+            console.log('Lead already in Appointment Scheduled stage');
+            return true;
+        }
+
+        // Record stage change history
+        await supabase
+            .from('lead_stage_history')
+            .insert({
+                lead_id: lead.id,
+                from_stage_id: lead.current_stage_id,
+                to_stage_id: appointmentStage.id,
+                reason: `Booked appointment for ${appointmentDetails.appointmentDate} at ${appointmentDetails.startTime}`,
+                changed_by: 'appointment_booking',
+            });
+
+        // Update lead's current stage
+        const { error: updateError } = await supabase
+            .from('leads')
+            .update({
+                current_stage_id: appointmentStage.id,
+                ai_classification_reason: `Booked appointment (ID: ${appointmentDetails.appointmentId})`,
+            })
+            .eq('id', lead.id);
+
+        if (updateError) {
+            console.error('Error updating lead stage:', updateError);
+            return false;
+        }
+
+        console.log(`📅 Lead ${lead.id} moved to Appointment Scheduled stage`);
+
+        // Trigger workflows for this stage change
+        try {
+            const { triggerWorkflowsForStage } = await import('./workflowEngine');
+            await triggerWorkflowsForStage(appointmentStage.id, lead.id);
+        } catch (workflowError) {
+            console.error('Error triggering workflows:', workflowError);
+        }
+
+        return true;
+    } catch (error) {
+        console.error('Error in moveLeadToAppointmentStage:', error);
         return false;
     }
 }

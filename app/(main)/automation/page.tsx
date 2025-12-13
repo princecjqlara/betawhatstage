@@ -4,6 +4,12 @@ import WorkflowCanvas from './components/WorkflowCanvas';
 import { Play, Edit2, Beaker, Wand2, Save } from 'lucide-react';
 import { useState, useEffect, Suspense, useRef } from 'react';
 import { useSearchParams } from 'next/navigation';
+import type { Node, Edge } from '@xyflow/react';
+
+type WorkflowData = {
+    nodes: Node[];
+    edges: Edge[];
+};
 
 function AutomationPageContent() {
     const searchParams = useSearchParams();
@@ -14,7 +20,7 @@ function AutomationPageContent() {
     const [isPublished, setIsPublished] = useState(false);
     const [isSaving, setIsSaving] = useState(false);
     const [isEditingName, setIsEditingName] = useState(false);
-    const [initialWorkflowData, setInitialWorkflowData] = useState<any>(null);
+    const [initialWorkflowData, setInitialWorkflowData] = useState<WorkflowData | null>(null);
     const [loading, setLoading] = useState(true);
     const [showTestModal, setShowTestModal] = useState(false);
     const [testLeads, setTestLeads] = useState<Array<{ id: string; sender_id: string; name: string | null }>>([]);
@@ -28,7 +34,7 @@ function AutomationPageContent() {
     const [generateError, setGenerateError] = useState('');
 
     // Track current workflow data from canvas
-    const currentWorkflowDataRef = useRef<any>(null);
+    const currentWorkflowDataRef = useRef<WorkflowData | null>(null);
 
     // Publish confirmation modal state
     const [showPublishConfirmModal, setShowPublishConfirmModal] = useState(false);
@@ -79,7 +85,7 @@ function AutomationPageContent() {
     const [saveStatus, setSaveStatus] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
 
     // Called whenever workflow data changes (from canvas auto-save)
-    const handleWorkflowChange = (workflowData: any) => {
+    const handleWorkflowChange = (workflowData: WorkflowData) => {
         currentWorkflowDataRef.current = workflowData;
         // Reset saved status if user makes changes
         if (saveStatus === 'saved') {
@@ -96,26 +102,32 @@ function AutomationPageContent() {
         await handleSave(currentWorkflowDataRef.current);
     };
 
-    const handleSave = async (workflowData: any) => {
+    const handleSave = async (workflowData: WorkflowData) => {
         setSaveStatus('saving');
         setIsSaving(true);
         try {
-            // Extract trigger_stage_id from trigger node
-            const triggerNode = workflowData.nodes.find((n: any) => n.data.type === 'trigger');
-            const trigger_stage_id = triggerNode?.data?.triggerStageId || null;
+            // Extract trigger data from trigger node
+            const triggerNode = workflowData.nodes.find((n) => n.data.type === 'trigger');
+            const triggerData = triggerNode?.data as { triggerStageId?: string; triggerType?: string } | undefined;
+            const trigger_stage_id = triggerData?.triggerStageId || null;
+            const trigger_type = triggerData?.triggerType || 'stage_change';
 
             if (workflowId) {
                 // Update existing
-                await fetch('/api/workflows', {
+                const res = await fetch('/api/workflows', {
                     method: 'PUT',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
                         id: workflowId,
                         name: workflowName,
                         workflow_data: workflowData,
-                        trigger_stage_id
+                        trigger_stage_id,
+                        trigger_type
                     }),
                 });
+                if (!res.ok) {
+                    throw new Error('Failed to update workflow');
+                }
             } else {
                 // Create new
                 const res = await fetch('/api/workflows', {
@@ -124,9 +136,13 @@ function AutomationPageContent() {
                     body: JSON.stringify({
                         name: workflowName,
                         workflow_data: workflowData,
-                        trigger_stage_id
+                        trigger_stage_id,
+                        trigger_type
                     }),
                 });
+                if (!res.ok) {
+                    throw new Error('Failed to create workflow');
+                }
                 const data = await res.json();
                 setWorkflowId(data.id);
             }
@@ -162,9 +178,10 @@ function AutomationPageContent() {
         }
 
         // Check if trigger node has applyToExisting enabled
-        const triggerNode = currentWorkflowDataRef.current?.nodes?.find((n: any) => n.data.type === 'trigger');
-        const applyToExisting = triggerNode?.data?.applyToExisting || false;
-        const triggerStageId = triggerNode?.data?.triggerStageId;
+        const triggerNode = currentWorkflowDataRef.current?.nodes?.find((n) => n.data.type === 'trigger');
+        const triggerData = triggerNode?.data as { applyToExisting?: boolean; triggerStageId?: string } | undefined;
+        const applyToExisting = triggerData?.applyToExisting || false;
+        const triggerStageId = triggerData?.triggerStageId;
 
         if (applyToExisting && triggerStageId) {
             // Fetch count of existing leads in the trigger stage
@@ -172,7 +189,7 @@ function AutomationPageContent() {
                 const res = await fetch('/api/pipeline/leads');
                 const data = await res.json();
                 // Find the stage and count its leads
-                const stage = data.stages?.find((s: any) => s.id === triggerStageId);
+                const stage = (data.stages as Array<{ id: string; leads?: unknown[] }>)?.find((s) => s.id === triggerStageId);
                 const count = stage?.leads?.length || 0;
                 setExistingLeadsCount(count);
                 setShowPublishConfirmModal(true);
@@ -191,7 +208,7 @@ function AutomationPageContent() {
     const doPublish = async (publish: boolean, applyToExisting: boolean) => {
         setIsPublishing(true);
         try {
-            await fetch(`/api/workflows/${workflowId}/publish`, {
+            const res = await fetch(`/api/workflows/${workflowId}/publish`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
@@ -199,6 +216,9 @@ function AutomationPageContent() {
                     apply_to_existing: applyToExisting
                 }),
             });
+            if (!res.ok) {
+                throw new Error('Failed to publish workflow');
+            }
             setIsPublished(publish);
             setShowPublishConfirmModal(false);
         } catch (error) {
@@ -338,10 +358,10 @@ function AutomationPageContent() {
                         onClick={handleSaveClick}
                         disabled={saveStatus === 'saving'}
                         className={`flex items-center gap-2 px-4 py-2 rounded-lg font-medium text-sm transition-colors shadow-sm text-white disabled:opacity-50 ${saveStatus === 'saved'
-                                ? 'bg-green-700 hover:bg-green-800'
-                                : saveStatus === 'error'
-                                    ? 'bg-red-600 hover:bg-red-700'
-                                    : 'bg-green-600 hover:bg-green-700'
+                            ? 'bg-green-700 hover:bg-green-800'
+                            : saveStatus === 'error'
+                                ? 'bg-red-600 hover:bg-red-700'
+                                : 'bg-green-600 hover:bg-green-700'
                             }`}
                     >
                         <Save size={16} />
@@ -472,6 +492,12 @@ function AutomationPageContent() {
                                     className="text-xs px-2 py-1 bg-gray-100 text-gray-600 rounded-full hover:bg-gray-200 transition-colors"
                                 >
                                     Re-engagement
+                                </button>
+                                <button
+                                    onClick={() => setAiPrompt('Create appointment reminders. Send a reminder 1 day before, 1 hour before, and 10 minutes before the appointment.')}
+                                    className="text-xs px-2 py-1 bg-blue-100 text-blue-600 rounded-full hover:bg-blue-200 transition-colors"
+                                >
+                                    📅 Appointment reminders
                                 </button>
                             </div>
                         </div>

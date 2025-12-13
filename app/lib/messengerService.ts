@@ -115,6 +115,81 @@ export async function sendWithAccountUpdateTag(psid: string, text: string): Prom
     });
 }
 
+// Send an image message via Messenger
+export async function sendMessengerImage(
+    psid: string,
+    imageUrl: string,
+    options: MessengerSendOptions = {}
+): Promise<boolean> {
+    return sendMessengerAttachment(psid, imageUrl, 'image', options);
+}
+
+// Attachment type for Messenger
+export type AttachmentType = 'image' | 'video' | 'audio' | 'file';
+
+// Send any attachment via Messenger (image, video, audio, file)
+export async function sendMessengerAttachment(
+    psid: string,
+    url: string,
+    type: AttachmentType = 'file',
+    options: MessengerSendOptions = {}
+): Promise<boolean> {
+    try {
+        const PAGE_ACCESS_TOKEN = await getPageAccessToken();
+
+        if (!PAGE_ACCESS_TOKEN) {
+            console.error('[MessengerService] No Facebook Page Access Token available');
+            return false;
+        }
+
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const requestBody: any = {
+            recipient: { id: psid },
+            message: {
+                attachment: {
+                    type: type,
+                    payload: {
+                        url: url,
+                        is_reusable: true
+                    }
+                }
+            },
+        };
+
+        // Add messaging_type and tag for messages outside 24hr window
+        if (options.messagingType) {
+            requestBody.messaging_type = options.messagingType;
+        }
+        if (options.tag) {
+            requestBody.tag = options.tag;
+        }
+
+        console.log('[MessengerService] Sending attachment:', { psid, url, type, messagingType: options.messagingType, tag: options.tag });
+
+        const res = await fetch(
+            `https://graph.facebook.com/v21.0/me/messages?access_token=${PAGE_ACCESS_TOKEN}`,
+            {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(requestBody),
+            }
+        );
+
+        const resData = await res.json();
+
+        if (!res.ok) {
+            console.error('[MessengerService] Failed to send attachment:', resData);
+            return false;
+        }
+
+        console.log('[MessengerService] Attachment sent successfully');
+        return true;
+    } catch (error) {
+        console.error('[MessengerService] Error sending attachment:', error);
+        return false;
+    }
+}
+
 export async function canUseBotForLead(leadId: string): Promise<boolean> {
     const { data: lead } = await supabase
         .from('leads')

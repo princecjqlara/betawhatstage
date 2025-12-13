@@ -48,3 +48,23 @@ export function isPaymentQuery(message: string): boolean {
     const lowerMessage = message.toLowerCase();
     return PAYMENT_KEYWORDS.some(keyword => lowerMessage.includes(keyword));
 }
+
+// Appointment-related keywords
+const APPOINTMENT_KEYWORDS = [
+    'appointment', 'schedule', 'book', 'booking', 'reserve', 'reservation',
+    'available', 'slot', 'slots', 'time', 'date', 'calendar', 'meet', 'meeting',
+    'consultation', 'consult', 'visit', 'sched', 'magbook', 'magschedule',
+    'ibook', 'isched', 'paki-book', 'pakibook', 'set appointment', 'set sched'
+];
+
+// Check if message is asking about appointments
+export function isAppointmentQuery(message: string): boolean {
+    const lowerMessage = message.toLowerCase();
+
+    // Check for specific patterns
+    if (lowerMessage.includes('book') && (lowerMessage.includes('appointment') || lowerMessage.includes('sched'))) return true;
+    if (lowerMessage.includes('set') && (lowerMessage.includes('appointment') || lowerMessage.includes('schedule'))) return true;
+    if (lowerMessage.includes('available') && (lowerMessage.includes('time') || lowerMessage.includes('slot') || lowerMessage.includes('sched'))) return true;
+
+    return APPOINTMENT_KEYWORDS.some(keyword => lowerMessage.includes(keyword));
+}

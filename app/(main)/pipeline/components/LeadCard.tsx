@@ -19,6 +19,7 @@ interface LeadCardProps {
     index: number;
     onMoveClick: (leadId: string) => void;
     moveMenuOpen: boolean;
+    onClick?: (lead: Lead) => void;
 }
 
 function formatTimeAgo(dateString: string | null): string {
@@ -46,7 +47,7 @@ function stringToColor(str: string) {
     return '#' + '00000'.substring(0, 6 - c.length) + c;
 }
 
-export default function LeadCard({ lead, index, onMoveClick, moveMenuOpen }: LeadCardProps) {
+export default function LeadCard({ lead, index, onMoveClick, moveMenuOpen, onClick }: LeadCardProps) {
     // Extract potential tags from AI classification or use defaults
     const getTags = () => {
         const tags = [];
@@ -68,7 +69,8 @@ export default function LeadCard({ lead, index, onMoveClick, moveMenuOpen }: Lea
                 <div
                     ref={provided.innerRef}
                     {...provided.draggableProps}
-                    className={`bg-white rounded-xl p-4 transition-all group relative border ${snapshot.isDragging
+                    onClick={() => onClick?.(lead)}
+                    className={`bg-white rounded-xl p-4 transition-all group relative border cursor-pointer ${snapshot.isDragging
                         ? 'shadow-xl border-blue-400 rotate-2 z-50'
                         : 'border-gray-100 hover:border-gray-200 shadow-sm hover:shadow-md'
                         }`}

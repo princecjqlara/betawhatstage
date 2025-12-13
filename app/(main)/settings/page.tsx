@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect, Suspense } from 'react';
-import { ArrowLeft, Facebook, Trash2, CheckCircle, AlertCircle, Loader2 } from 'lucide-react';
+import { ArrowLeft, Facebook, Trash2, CheckCircle, AlertCircle, Loader2, Calendar } from 'lucide-react';
 import Link from 'next/link';
 import { useSearchParams } from 'next/navigation';
 import PageSelector from '@/app/components/PageSelector';
@@ -23,6 +23,8 @@ interface FacebookPageData {
     picture: string | null;
 }
 
+
+
 function SettingsContent() {
     const searchParams = useSearchParams();
 
@@ -38,23 +40,40 @@ function SettingsContent() {
     useEffect(() => {
         const success = searchParams.get('success');
         const error = searchParams.get('error');
-        const facebookPagesParam = searchParams.get('facebook_pages');
+        const fbSession = searchParams.get('fb_session');
 
         if (error) {
             setMessage(`Error: ${decodeURIComponent(error)}`);
-        } else if (success && facebookPagesParam) {
-            try {
-                const pages = JSON.parse(decodeURIComponent(facebookPagesParam));
-                setAvailablePages(pages);
-                setShowPageSelector(true);
+            window.history.replaceState({}, '', '/settings');
+        } else if (success && fbSession) {
+            // Fetch pages from server-side session
+            const fetchPagesFromSession = async () => {
+                try {
+                    console.log('Fetching pages from session:', fbSession);
+                    const res = await fetch(`/api/auth/facebook/temp-pages?session_id=${fbSession}`);
+                    const data = await res.json();
+
+                    console.log('Session API response:', data);
+
+                    if (data.pages && data.pages.length > 0) {
+                        setAvailablePages(data.pages);
+                        setShowPageSelector(true);
+                    } else {
+                        setMessage('No Facebook pages found. Make sure you have admin access to at least one page.');
+                    }
+                } catch (e) {
+                    console.error('Failed to fetch pages from session:', e);
+                    setMessage('Failed to process Facebook pages data');
+                }
                 // Clear URL params after processing
                 window.history.replaceState({}, '', '/settings');
-            } catch (e) {
-                console.error('Failed to parse pages data:', e);
-                setMessage('Failed to process Facebook pages data');
-            }
+            };
+
+            fetchPagesFromSession();
         }
     }, [searchParams]);
+
+
 
     useEffect(() => {
         fetchConnectedPages();
@@ -276,20 +295,20 @@ function SettingsContent() {
                         )}
                     </div>
                 </div>
-
-                {/* Page Selector Modal */}
-                {showPageSelector && (
-                    <PageSelector
-                        pages={availablePages}
-                        onConnect={handleConnectPages}
-                        onClose={() => {
-                            setShowPageSelector(false);
-                            setAvailablePages([]);
-                            window.history.replaceState({}, '', '/settings');
-                        }}
-                    />
-                )}
             </div>
+
+            {/* Page Selector Modal */}
+            {showPageSelector && (
+                <PageSelector
+                    pages={availablePages}
+                    onConnect={handleConnectPages}
+                    onClose={() => {
+                        setShowPageSelector(false);
+                        setAvailablePages([]);
+                        window.history.replaceState({}, '', '/settings');
+                    }}
+                />
+            )}
         </div>
     );
 }

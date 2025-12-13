@@ -41,8 +41,9 @@ export async function updateSession(request: NextRequest) {
     // Allow public access to product/property detail pages
     const isPublicProductPage = /^\/product\/[^/]+$/.test(request.nextUrl.pathname);
     const isPublicPropertyPage = /^\/property\/[^/]+$/.test(request.nextUrl.pathname);
+    const isBookingPage = request.nextUrl.pathname === '/book';
 
-    if (!user && !isLoginPage && !isApiRoute && !isPublicProductPage && !isPublicPropertyPage) {
+    if (!user && !isLoginPage && !isApiRoute && !isPublicProductPage && !isPublicPropertyPage && !isBookingPage) {
         // Redirect unauthenticated users to login
         const url = request.nextUrl.clone();
         url.pathname = '/login';

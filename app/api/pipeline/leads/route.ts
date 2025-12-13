@@ -33,7 +33,11 @@ export async function GET() {
             leads: leads?.filter(lead => lead.current_stage_id === stage.id) || [],
         })) || [];
 
-        return NextResponse.json({ stages: stagesWithLeads });
+        return NextResponse.json({ stages: stagesWithLeads }, {
+            headers: {
+                'Cache-Control': 'private, s-maxage=10, stale-while-revalidate=30',
+            },
+        });
     } catch (error) {
         console.error('Error:', error);
         return NextResponse.json({ error: 'Internal Server Error' }, { status: 500 });

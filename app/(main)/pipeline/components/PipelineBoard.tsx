@@ -5,6 +5,7 @@ import { Plus, Settings2, RefreshCw, Filter, Search, LayoutTemplate, List, Kanba
 import { DragDropContext, DropResult } from '@hello-pangea/dnd';
 import StageColumn from './StageColumn';
 import ListView from './ListView';
+import LeadDetailsModal from './LeadDetailsModal';
 
 interface Lead {
     id: string;
@@ -36,7 +37,15 @@ export default function PipelineBoard() {
     const [viewMode, setViewMode] = useState<'board' | 'list'>('board');
     const [searchQuery, setSearchQuery] = useState('');
     const [filterStageId, setFilterStageId] = useState<string | 'all'>('all');
+
     const [isFilterOpen, setIsFilterOpen] = useState(false);
+
+    // Modal State
+    const [selectedLead, setSelectedLead] = useState<Lead | null>(null);
+
+    const handleLeadClick = (lead: Lead) => {
+        setSelectedLead(lead);
+    };
 
     const fetchData = useCallback(async () => {
         try {
@@ -274,6 +283,7 @@ export default function PipelineBoard() {
                                     stage={stage}
                                     onMoveLead={handleMoveLead}
                                     allStages={stages}
+                                    onLeadClick={handleLeadClick}
                                 />
                             ))}
 
@@ -322,6 +332,14 @@ export default function PipelineBoard() {
                     <ListView stages={filteredStages} onMoveLead={handleMoveLead} />
                 )}
             </div>
+
+            {/* Detailed Lead Modal */}
+            <LeadDetailsModal
+                isOpen={!!selectedLead}
+                onClose={() => setSelectedLead(null)}
+                leadId={selectedLead?.id || null}
+                initialLeadData={selectedLead}
+            />
         </div>
     );
 }

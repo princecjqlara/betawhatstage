@@ -51,17 +51,25 @@ export default function WorkflowsPage() {
 
     const createWorkflow = async () => {
         const prompt = newWorkflowName.trim();
-        if (!prompt) return;
+        // if (!prompt) return; // Allow empty prompts for "create from scratch"
 
         setIsCreating(true);
         try {
+            // Default trigger node for all new workflows
+            const defaultTriggerNode = {
+                id: '1',
+                type: 'custom',
+                position: { x: 100, y: 100 },
+                data: { label: 'Pipeline Stage Changed', description: 'Trigger when lead enters this stage', type: 'trigger' },
+            };
+
             const res = await fetch('/api/workflows', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
-                    prompt, // Send as prompt for AI generation
-                    name: prompt, // Also send as name fallback
-                    workflow_data: { nodes: [], edges: [] }
+                    prompt, // Send as prompt for AI generation (empty string if scratching)
+                    name: prompt || 'New Workflow', // Fallback name if prompt is empty
+                    workflow_data: { nodes: [defaultTriggerNode], edges: [] }
                 }),
             });
             const data = await res.json();

@@ -1,13 +1,15 @@
-import { getBotResponse, ImageContext } from '@/app/lib/chatService';
-import { extractAndStoreContactInfo } from '@/app/lib/contactExtractionService';
+import { generateConversationSummary, getBotResponse, ImageContext } from '@/app/lib/chatService';
+import { extractAndStoreContactInfo, extractContactInfo } from '@/app/lib/contactExtractionService';
 import { isTakeoverActive } from '@/app/lib/humanTakeoverService';
 import { analyzeImageForReceipt, isConfirmedReceipt } from '@/app/lib/receiptDetectionService';
 import { analyzeAndUpdateStage, getOrCreateLead, incrementMessageCount, moveLeadToReceiptStage, shouldAnalyzeStage } from '@/app/lib/pipelineService';
 import { supabase } from '@/app/lib/supabase';
-import { callSendAPI, sendPaymentMethodCards, sendProductCards, sendPropertyCards, sendTypingIndicator } from './facebookClient';
-import { getPageToken } from './config';
-import { getPaymentMethods, getProducts, getProperties, PaymentMethod } from './data';
-import { isPaymentQuery, isProductQuery, isPropertyQuery } from './keywords';
+
+import { trackActivity } from '@/app/lib/activityTrackingService';
+import { callSendAPI, sendAppointmentCard, sendPaymentMethodCards, sendProductCards, sendPropertyCards, sendTypingIndicator } from './facebookClient';
+import { getPageToken, getSettings } from './config';
+import { getPaymentMethods, getProductById, getProducts, getProperties, PaymentMethod } from './data';
+import { isAppointmentQuery, isPaymentQuery, isProductQuery, isPropertyQuery } from './keywords';
 
 type WaitUntil = (promise: Promise<unknown>) => void;
 
@@ -35,6 +37,12 @@ export async function handleReferral(sender_psid: string, referral: any, pageId?
         if (product && !error) {
             const variationText = varsString ? `\nSelected Options: ${varsString.split(',').join(', ')}` : '';
 
+            // Track product view activity
+            await trackActivity(sender_psid, 'product_view', product.id, product.name, {
+                variations: varsString || null,
+                price: product.price,
+            });
+
             // Send welcome message with product context
             await callSendAPI(sender_psid, {
                 text: `Hi! 👋 I see you're interested in ${product.name}.${variationText}\n\nHow can we help you with your purchase today?`
@@ -60,6 +68,15 @@ export async function handleReferral(sender_psid: string, referral: any, pageId?
             .single();
 
         if (property && !error) {
+            // Track property view activity
+            await trackActivity(sender_psid, 'property_view', property.id, property.title, {
+                price: property.price,
+                address: property.address,
+                bedrooms: property.bedrooms,
+                bathrooms: property.bathrooms,
+                status: property.status,
+            });
+
             const appUrl = process.env.NEXT_PUBLIC_BASE_URL || process.env.NEXT_PUBLIC_APP_URL || 'https://aphelion-photon.vercel.app';
             const formattedPrice = property.price
                 ? `₱${property.price.toLocaleString('en-PH', { minimumFractionDigits: 0 })}`
@@ -143,12 +160,234 @@ export async function handlePostback(postback: any, sender_psid: string, recipie
         // Fetch property details to give context
         const { data: prop } = await supabase.from('properties').select('title, price').eq('id', propId).single();
 
+        // Track property inquiry activity
+        await trackActivity(sender_psid, 'property_inquiry', propId, prop?.title || 'Unknown Property', {
+            price: prop?.price,
+        });
+
         // Send automated response
         await callSendAPI(sender_psid, {
             text: `Thanks for your interest in ${prop?.title || 'this property'}! An agent will be with you shortly to assist you.`
         }, recipient_psid);
 
         // We could also notify the agent here via pipeline/lead update
+        return true;
+    }
+
+    // Handle Add to Cart postback
+    if (postback.payload && postback.payload.startsWith('ADD_TO_CART_')) {
+        const productId = postback.payload.replace('ADD_TO_CART_', '');
+        console.log('Add to Cart Postback:', productId);
+
+        const { product, hasVariations } = await getProductById(productId);
+
+        if (!product) {
+            await callSendAPI(sender_psid, {
+                text: "Sorry, that product is no longer available. 😔"
+            }, recipient_psid);
+            return true;
+        }
+
+        if (hasVariations) {
+            // Product has variations, redirect to website to select options
+            const appUrl = process.env.NEXT_PUBLIC_BASE_URL || process.env.NEXT_PUBLIC_APP_URL || 'https://aphelion-photon.vercel.app';
+            let productUrl = `${appUrl}/product/${productId}?psid=${encodeURIComponent(sender_psid)}`;
+            if (recipient_psid) {
+                productUrl += `&pageId=${encodeURIComponent(recipient_psid)}`;
+            }
+
+            await callSendAPI(sender_psid, {
+                attachment: {
+                    type: 'template',
+                    payload: {
+                        template_type: 'button',
+                        text: `${product.name} has options to choose from. Please select your preferred options on our website:`,
+                        buttons: [
+                            {
+                                type: 'web_url',
+                                url: productUrl,
+                                title: '🛒 Select Options',
+                                webview_height_ratio: 'tall'
+                            }
+                        ]
+                    }
+                }
+            }, recipient_psid);
+            return true;
+        }
+
+        // No variations - add directly to cart
+        try {
+            // Call our cart API directly (internal call)
+            const baseUrl = process.env.NEXT_PUBLIC_BASE_URL || process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000';
+            const res = await fetch(`${baseUrl}/api/store/cart`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    sender_id: sender_psid,
+                    product_id: productId,
+                    quantity: 1,
+                    unit_price: product.price || 0,
+                }),
+            });
+
+            if (res.ok) {
+                const cartResponse = await res.json();
+                const cartId = cartResponse.cart_id;
+
+                // Fetch current cart details to show in message
+                const cartRes = await fetch(`${baseUrl}/api/store/cart?sender_id=${encodeURIComponent(sender_psid)}`);
+                const cartData = await cartRes.json();
+
+                // Build cart summary
+                const cartItems = cartData.items || [];
+                const itemsList = cartItems.map((item: any, idx: number) => {
+                    const variationsText = item.variations
+                        ? ` (${Object.values(item.variations).join(', ')})`
+                        : '';
+                    return `${idx + 1}. ${item.product_name}${variationsText} - x${item.quantity} = ₱${(item.unit_price * item.quantity).toLocaleString()}`;
+                }).join('\n');
+
+                const totalAmount = cartData.cart?.total_amount || 0;
+                const itemCount = cartItems.reduce((sum: number, item: any) => sum + item.quantity, 0);
+
+                const cartSummary = `✅ Added ${product.name} to your cart!\n\n🛒 Your Cart (${itemCount} ${itemCount === 1 ? 'item' : 'items'}):\n${itemsList}\n\n💰 Total: ₱${totalAmount.toLocaleString()}\n\nWhat would you like to do next?`;
+
+                // Send confirmation with buttons
+                const appUrl = process.env.NEXT_PUBLIC_BASE_URL || process.env.NEXT_PUBLIC_APP_URL || 'https://aphelion-photon.vercel.app';
+                let checkoutUrl = `${appUrl}/checkout?psid=${encodeURIComponent(sender_psid)}`;
+                if (recipient_psid) {
+                    checkoutUrl += `&pageId=${encodeURIComponent(recipient_psid)}`;
+                }
+
+                await callSendAPI(sender_psid, {
+                    attachment: {
+                        type: 'template',
+                        payload: {
+                            template_type: 'button',
+                            text: cartSummary,
+                            buttons: [
+                                {
+                                    type: 'web_url',
+                                    url: checkoutUrl,
+                                    title: '🛍️ Checkout',
+                                    webview_height_ratio: 'tall'
+                                },
+                                {
+                                    type: 'postback',
+                                    title: '🔙 Continue Shopping',
+                                    payload: 'SHOW_PRODUCTS'
+                                }
+                            ]
+                        }
+                    }
+                }, recipient_psid);
+
+                // Track activity
+                await trackActivity(sender_psid, 'add_to_cart', productId, product.name, {
+                    price: product.price,
+                });
+            } else {
+                console.error('Failed to add to cart:', await res.text());
+                await callSendAPI(sender_psid, {
+                    text: "Sorry, there was an issue adding that to your cart. Please try again. 😔"
+                }, recipient_psid);
+            }
+        } catch (error) {
+            console.error('Error adding to cart:', error);
+            await callSendAPI(sender_psid, {
+                text: "Sorry, there was an issue adding that to your cart. Please try again. 😔"
+            }, recipient_psid);
+        }
+
+        return true;
+    }
+
+    // Handle Appointment Cancellation Confirmation
+    if (postback.payload && postback.payload.startsWith('CANCEL_APT_CONFIRM_')) {
+        const appointmentId = postback.payload.replace('CANCEL_APT_CONFIRM_', '');
+        console.log('Appointment Cancellation Confirmed:', appointmentId);
+
+        try {
+            // Cancel the appointment
+            const { data: appointment, error } = await supabase
+                .from('appointments')
+                .update({
+                    status: 'cancelled',
+                    cancelled_at: new Date().toISOString(),
+                    cancelled_reason: 'Cancelled by customer via Messenger confirmation'
+                })
+                .eq('id', appointmentId)
+                .select()
+                .single();
+
+            if (error) {
+                console.error('Error cancelling appointment:', error);
+                await callSendAPI(sender_psid, {
+                    text: "Sorry, there was an issue cancelling your appointment. Please try again or contact us directly. 😔"
+                }, recipient_psid);
+                return true;
+            }
+
+            // Format date and time for confirmation message
+            const [year, month, day] = appointment.appointment_date.split('-').map(Number);
+            const aptDate = new Date(year, month - 1, day);
+            const formattedDate = aptDate.toLocaleDateString('en-US', {
+                weekday: 'long',
+                month: 'long',
+                day: 'numeric'
+            });
+
+            await callSendAPI(sender_psid, {
+                text: `✅ Your appointment on ${formattedDate} has been cancelled.\n\nIf you'd like to book a new appointment, just let me know! 📅`
+            }, recipient_psid);
+
+            // Track activity
+            await trackActivity(sender_psid, 'appointment_cancelled', appointmentId, 'Appointment cancelled via Messenger', {
+                appointment_date: appointment.appointment_date,
+                start_time: appointment.start_time,
+            });
+
+        } catch (error) {
+            console.error('Error in cancellation confirmation:', error);
+            await callSendAPI(sender_psid, {
+                text: "Sorry, something went wrong. Please try again. 😔"
+            }, recipient_psid);
+        }
+
+        return true;
+    }
+
+    // Handle Appointment Cancellation Rejection (Keep Appointment)
+    if (postback.payload && postback.payload.startsWith('CANCEL_APT_KEEP_')) {
+        const appointmentId = postback.payload.replace('CANCEL_APT_KEEP_', '');
+        console.log('Appointment Cancellation Rejected (Kept):', appointmentId);
+
+        // Fetch appointment details for the message
+        const { data: appointment } = await supabase
+            .from('appointments')
+            .select('appointment_date, start_time')
+            .eq('id', appointmentId)
+            .single();
+
+        if (appointment) {
+            const [year, month, day] = appointment.appointment_date.split('-').map(Number);
+            const aptDate = new Date(year, month - 1, day);
+            const formattedDate = aptDate.toLocaleDateString('en-US', {
+                weekday: 'long',
+                month: 'long',
+                day: 'numeric'
+            });
+
+            await callSendAPI(sender_psid, {
+                text: `✅ Great! Your appointment on ${formattedDate} is still confirmed.\n\nWe look forward to seeing you! 😊`
+            }, recipient_psid);
+        } else {
+            await callSendAPI(sender_psid, {
+                text: "✅ Your appointment has been kept. We look forward to seeing you! 😊"
+            }, recipient_psid);
+        }
+
         return true;
     }
 
@@ -165,80 +404,25 @@ export async function handleMessage(sender_psid: string, received_message: strin
         return;
     }
 
+    // Get page access token for profile fetching (using per-page token)
+    const pageToken = await getPageToken(pageId);
+
+    // Get or create lead early to check goal status
+    const lead = await getOrCreateLead(sender_psid, pageToken || undefined);
+
+    // --- BOT GOAL CHECK ---
+    // REMOVED
+
     // Send typing indicator immediately
     await sendTypingIndicator(sender_psid, true, pageId);
 
     // Process message and send response
     try {
-        // Check if this is a product-related query
-        if (isProductQuery(received_message)) {
-            console.log('Product query detected, fetching products...');
-            const products = await getProducts();
-
-            if (products.length > 0) {
-                // Send intro message first
-                await callSendAPI(sender_psid, {
-                    text: 'Here are our available products! 🛍️ Click on any item to view more details:'
-                }, pageId);
-
-                // Send product cards
-                const cardsSent = await sendProductCards(sender_psid, products, pageId);
-
-                if (cardsSent) {
-                    return; // Don't send AI response, cards are enough
-                }
-            }
-        }
-
-        // Check if this is a PROPERTY-related query
-        if (isPropertyQuery(received_message)) {
-            console.log('Property query detected, fetching properties...');
-            const properties = await getProperties();
-
-            if (properties.length > 0) {
-                // Send intro message first
-                await callSendAPI(sender_psid, {
-                    text: 'Here are our latest properties for you! 🏠 Click to view details:'
-                }, pageId);
-
-                // Send property cards
-                const cardsSent = await sendPropertyCards(sender_psid, properties, pageId);
-
-                if (cardsSent) {
-                    return; // Don't send AI response, cards are enough
-                }
-            }
-        }
-
-        // Check if this is a payment-related query
-        if (isPaymentQuery(received_message)) {
-            console.log('Payment query detected, fetching payment methods...');
-            const paymentMethods = await getPaymentMethods();
-
-            if (paymentMethods.length > 0) {
-                // Send intro message first
-                await callSendAPI(sender_psid, {
-                    text: 'Ito po ang aming payment options! 💳 Pwede po kayong pumili kung saan kayo magbabayad:'
-                }, pageId);
-
-                // Send payment method cards
-                const cardsSent = await sendPaymentMethodCards(sender_psid, paymentMethods, pageId);
-
-                if (cardsSent) {
-                    // Also send a follow-up message
-                    await callSendAPI(sender_psid, {
-                        text: 'Pag nakapagbayad na po kayo, kindly send the screenshot ng receipt para ma-verify namin. Salamat po! 🙏'
-                    }, pageId);
-                    return; // Don't send AI response, cards are enough
-                }
-            }
-        }
-
-        // Get page access token for profile fetching (using per-page token)
-        const pageToken = await getPageToken(pageId);
+        // --- REMOVED STRICT KEYWORD TRIGGERS ---
+        // We now let the AI decide when to show these UIs based on context.
+        // The AI will output tags like [SHOW_PRODUCTS], [SHOW_BOOKING], etc.
 
         // Track the lead and check if stage analysis is needed
-        const lead = await getOrCreateLead(sender_psid, pageToken || undefined);
         if (lead) {
             const messageCount = await incrementMessageCount(lead.id);
             console.log(`Lead ${lead.id} message count: ${messageCount}`);
@@ -248,23 +432,203 @@ export async function handleMessage(sender_psid: string, received_message: strin
                 console.error('Error extracting contact info:', err);
             });
 
-            // Check if we should analyze stage (runs in background, non-blocking)
+            // CHeck if we should analyze stage (runs in background, non-blocking)
             if (shouldAnalyzeStage({ ...lead, message_count: messageCount }, received_message)) {
                 console.log('Triggering pipeline stage analysis...');
                 analyzeAndUpdateStage(lead, sender_psid).catch((err: unknown) => {
                     console.error('Error in stage analysis:', err);
                 });
             }
+
+            // --- CONVERSATION SUMMARIZATION CHECK ---
+            // Summarize every 20 messages to keep long-term context
+            if (messageCount > 0 && messageCount % 20 === 0) {
+                console.log(`Triggering conversation summary at message count ${messageCount}...`);
+                generateConversationSummary(sender_psid, lead.id).catch((err: unknown) => {
+                    console.error('Error in conversation summary:', err);
+                });
+            }
         }
 
-        const responseText = await getBotResponse(received_message, sender_psid);
-        console.log('Bot response generated:', responseText.substring(0, 100) + '...');
+        // Get Bot Response
+        const rawResponseText = await getBotResponse(received_message, sender_psid);
+        console.log('Raw Bot response:', rawResponseText.substring(0, 100) + '...');
 
-        const response = {
-            text: responseText,
-        };
+        // Parse tags from response
+        let finalResponseText = rawResponseText;
+        const showProducts = rawResponseText.includes('[SHOW_PRODUCTS]');
+        const showProperties = rawResponseText.includes('[SHOW_PROPERTIES]');
+        const showBooking = rawResponseText.includes('[SHOW_BOOKING]');
+        const showPaymentMethods = rawResponseText.includes('[SHOW_PAYMENT_METHODS]');
+        const showCart = rawResponseText.includes('[SHOW_CART]');
 
-        await callSendAPI(sender_psid, response, pageId);
+        // Check for REMOVE_CART tag with product name
+        const removeCartMatch = rawResponseText.match(/\[REMOVE_CART:([^\]]+)\]/);
+        const productToRemove = removeCartMatch ? removeCartMatch[1].trim() : null;
+
+        // Remove tags from text to send to user
+        finalResponseText = finalResponseText
+            .replace(/\[SHOW_PRODUCTS\]/g, '')
+            .replace(/\[SHOW_PROPERTIES\]/g, '')
+            .replace(/\[SHOW_BOOKING\]/g, '')
+            .replace(/\[SHOW_PAYMENT_METHODS\]/g, '')
+            .replace(/\[SHOW_CART\]/g, '')
+            .replace(/\[REMOVE_CART:[^\]]+\]/g, '')
+            .trim();
+
+        // Send the AI's text response (possibly split into multiple messages)
+        if (finalResponseText) {
+            // Check if split messages is enabled
+            const settings = await getSettings();
+            const splitMessagesEnabled = settings?.split_messages ?? false;
+
+            if (splitMessagesEnabled) {
+                // Split by sentence-ending punctuation (. ? ! ) followed by space or end of string
+                // But keep the punctuation with the sentence
+                const sentences = finalResponseText
+                    .split(/(?<=[.?!。？！])\s+/)
+                    .map(s => s.trim())
+                    .filter(s => s.length > 0);
+
+                // Send each sentence as a separate message with slight delay
+                for (const sentence of sentences) {
+                    await callSendAPI(sender_psid, { text: sentence }, pageId);
+                    // Small delay between messages to make it feel more natural
+                    if (sentences.indexOf(sentence) < sentences.length - 1) {
+                        await new Promise(resolve => setTimeout(resolve, 300));
+                    }
+                }
+            } else {
+                // Send as single message
+                await callSendAPI(sender_psid, { text: finalResponseText }, pageId);
+            }
+        }
+
+        // --- HANDLE UI TRIGGERS ---
+
+        if (showProducts) {
+            console.log('AI triggered [SHOW_PRODUCTS]');
+            const products = await getProducts();
+            if (products.length > 0) {
+                await sendProductCards(sender_psid, products, pageId);
+            }
+        }
+
+        if (showProperties) {
+            console.log('AI triggered [SHOW_PROPERTIES]');
+            const properties = await getProperties();
+            if (properties.length > 0) {
+                await sendPropertyCards(sender_psid, properties, pageId);
+            }
+        }
+
+        if (showBooking) {
+            console.log('AI triggered [SHOW_BOOKING]');
+            await sendAppointmentCard(sender_psid, pageId);
+        }
+
+        if (showPaymentMethods) {
+            console.log('AI triggered [SHOW_PAYMENT_METHODS]');
+            const paymentMethods = await getPaymentMethods();
+            if (paymentMethods.length > 0) {
+                await sendPaymentMethodCards(sender_psid, paymentMethods, pageId);
+            }
+        }
+
+        // Handle cart removal via AI (must complete BEFORE showing cart)
+        if (productToRemove) {
+            console.log('AI triggered [REMOVE_CART] for:', productToRemove);
+            try {
+                const baseUrl = process.env.NEXT_PUBLIC_BASE_URL || process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000';
+                console.log(`Calling DELETE ${baseUrl}/api/store/cart?sender_id=${sender_psid}&product_name=${productToRemove}`);
+
+                const res = await fetch(
+                    `${baseUrl}/api/store/cart?sender_id=${encodeURIComponent(sender_psid)}&product_name=${encodeURIComponent(productToRemove)}`,
+                    { method: 'DELETE' }
+                );
+
+                const responseText = await res.text();
+                console.log('DELETE response status:', res.status, 'body:', responseText);
+
+                if (!res.ok) {
+                    try {
+                        const errorData = JSON.parse(responseText);
+                        console.error('Failed to remove from cart:', errorData.error);
+                        // Send error message only if item not found
+                        if (errorData.error === 'Item not found in cart') {
+                            await callSendAPI(sender_psid, {
+                                text: `Hindi ko po makita ang "${productToRemove}" sa cart mo. Baka mali yung pangalan? 🤔`
+                            }, pageId);
+                        }
+                    } catch (e) {
+                        console.error('Error parsing DELETE response:', responseText);
+                    }
+                } else {
+                    console.log('✅ Successfully removed item from cart');
+                }
+                // Success message is already sent by the DELETE API
+            } catch (error) {
+                console.error('Error removing item from cart:', error);
+            }
+        }
+
+        // Handle show cart
+        if (showCart) {
+            console.log('AI triggered [SHOW_CART]');
+            try {
+                const baseUrl = process.env.NEXT_PUBLIC_BASE_URL || process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000';
+                const res = await fetch(`${baseUrl}/api/store/cart?sender_id=${encodeURIComponent(sender_psid)}`);
+                const cartData = await res.json();
+
+                if (cartData.items && cartData.items.length > 0) {
+                    const itemsList = cartData.items.map((item: any, idx: number) => {
+                        const variationsText = item.variations
+                            ? ` (${Object.values(item.variations).join(', ')})`
+                            : '';
+                        return `${idx + 1}. ${item.product_name}${variationsText} - x${item.quantity} = ₱${(item.unit_price * item.quantity).toLocaleString()}`;
+                    }).join('\n');
+
+                    const totalAmount = cartData.cart?.total_amount || 0;
+                    const itemCount = cartData.items.reduce((sum: number, item: any) => sum + item.quantity, 0);
+
+                    const appUrl = process.env.NEXT_PUBLIC_BASE_URL || process.env.NEXT_PUBLIC_APP_URL || 'https://aphelion-photon.vercel.app';
+                    let checkoutUrl = `${appUrl}/checkout?psid=${encodeURIComponent(sender_psid)}`;
+                    if (pageId) {
+                        checkoutUrl += `&pageId=${encodeURIComponent(pageId)}`;
+                    }
+
+                    await callSendAPI(sender_psid, {
+                        attachment: {
+                            type: 'template',
+                            payload: {
+                                template_type: 'button',
+                                text: `🛒 Your Cart (${itemCount} ${itemCount === 1 ? 'item' : 'items'}):\n\n${itemsList}\n\n💰 Total: ₱${totalAmount.toLocaleString()}`,
+                                buttons: [
+                                    {
+                                        type: 'web_url',
+                                        url: checkoutUrl,
+                                        title: '🛍️ Checkout',
+                                        webview_height_ratio: 'tall'
+                                    },
+                                    {
+                                        type: 'postback',
+                                        title: '➕ Add More Items',
+                                        payload: 'SHOW_PRODUCTS'
+                                    }
+                                ]
+                            }
+                        }
+                    }, pageId);
+                } else {
+                    await callSendAPI(sender_psid, {
+                        text: '🛒 Wala pa pong laman ang cart mo. Gusto mo bang tumingin ng products? [SHOW_PRODUCTS]'
+                    }, pageId);
+                }
+            } catch (error) {
+                console.error('Error fetching cart:', error);
+            }
+        }
+
     } finally {
         // Turn off typing indicator
         await sendTypingIndicator(sender_psid, false, pageId);
@@ -409,8 +773,25 @@ export async function handleImageMessage(sender_psid: string, imageUrl: string, 
         const responseText = await getBotResponse(userMessage, sender_psid, imageContext);
         console.log('Bot response for image:', responseText.substring(0, 100) + '...');
 
-        // Send the AI's response
-        await callSendAPI(sender_psid, { text: responseText }, pageId);
+        // Send the AI's response (possibly split into multiple messages)
+        const settings = await getSettings();
+        const splitMessagesEnabled = settings?.split_messages ?? false;
+
+        if (splitMessagesEnabled) {
+            const sentences = responseText
+                .split(/(?<=[.?!。？！])\s+/)
+                .map(s => s.trim())
+                .filter(s => s.length > 0);
+
+            for (const sentence of sentences) {
+                await callSendAPI(sender_psid, { text: sentence }, pageId);
+                if (sentences.indexOf(sentence) < sentences.length - 1) {
+                    await new Promise(resolve => setTimeout(resolve, 300));
+                }
+            }
+        } else {
+            await callSendAPI(sender_psid, { text: responseText }, pageId);
+        }
 
     } catch (error) {
         console.error('Error in handleImageMessage:', error);

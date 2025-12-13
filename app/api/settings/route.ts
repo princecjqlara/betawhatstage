@@ -28,6 +28,13 @@ export async function GET() {
             facebookVerifyToken: data.facebook_verify_token || 'TEST_TOKEN',
             facebookPageAccessToken: data.facebook_page_access_token || '',
             humanTakeoverTimeoutMinutes: data.human_takeover_timeout_minutes ?? 5,
+            aiModel: data.ai_model || 'qwen/qwen3-235b-a22b',
+            splitMessages: data.split_messages ?? false,
+            // Setup fields
+            isSetupCompleted: data.is_setup_completed ?? false,
+            setupStep: data.setup_step || 1,
+            businessName: data.business_name || '',
+            businessDescription: data.business_description || '',
         });
     } catch (error) {
         console.error('Error:', error);
@@ -50,6 +57,8 @@ export async function POST(req: Request) {
         if (body.facebookVerifyToken !== undefined) updates.facebook_verify_token = body.facebookVerifyToken;
         if (body.facebookPageAccessToken !== undefined) updates.facebook_page_access_token = body.facebookPageAccessToken;
         if (body.humanTakeoverTimeoutMinutes !== undefined) updates.human_takeover_timeout_minutes = body.humanTakeoverTimeoutMinutes;
+        if (body.aiModel !== undefined) updates.ai_model = body.aiModel;
+        if (body.splitMessages !== undefined) updates.split_messages = body.splitMessages;
 
         // Check if settings row exists
         const { data: existing } = await supabase
@@ -79,6 +88,8 @@ export async function POST(req: Request) {
                     facebook_verify_token: body.facebookVerifyToken || 'TEST_TOKEN',
                     facebook_page_access_token: body.facebookPageAccessToken || null,
                     human_takeover_timeout_minutes: body.humanTakeoverTimeoutMinutes ?? 5,
+                    ai_model: body.aiModel || 'qwen/qwen3-235b-a22b',
+                    split_messages: body.splitMessages ?? false,
                 });
 
             if (error) {
@@ -94,6 +105,8 @@ export async function POST(req: Request) {
             facebookVerifyToken: body.facebookVerifyToken,
             facebookPageAccessToken: body.facebookPageAccessToken,
             humanTakeoverTimeoutMinutes: body.humanTakeoverTimeoutMinutes,
+            aiModel: body.aiModel,
+            splitMessages: body.splitMessages,
         });
     } catch (error) {
         console.error('Error:', error);

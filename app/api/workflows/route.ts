@@ -29,7 +29,7 @@ export async function GET() {
 export async function POST(req: Request) {
     try {
         const body = await req.json();
-        const { name, trigger_stage_id, workflow_data, prompt } = body;
+        const { name, trigger_stage_id, trigger_type, workflow_data, prompt } = body;
 
         let finalName = name;
         let finalWorkflowData = workflow_data;
@@ -61,7 +61,8 @@ export async function POST(req: Request) {
             .from('workflows')
             .insert({
                 name: finalName,
-                trigger_stage_id: validStageId,
+                trigger_stage_id: (trigger_type === 'appointment_booked') ? null : validStageId,
+                trigger_type: trigger_type || 'stage_change',
                 workflow_data: finalWorkflowData,
                 is_published: false,
             })
@@ -81,7 +82,7 @@ export async function POST(req: Request) {
 export async function PUT(req: Request) {
     try {
         const body = await req.json();
-        const { id, name, trigger_stage_id, workflow_data } = body;
+        const { id, name, trigger_stage_id, trigger_type, workflow_data } = body;
 
         // Validate trigger_stage_id is a valid UUID or set to null
         const validStageId = isValidUUID(trigger_stage_id) ? trigger_stage_id : null;
@@ -90,7 +91,8 @@ export async function PUT(req: Request) {
             .from('workflows')
             .update({
                 name,
-                trigger_stage_id: validStageId,
+                trigger_stage_id: (trigger_type === 'appointment_booked') ? null : validStageId,
+                trigger_type: trigger_type || 'stage_change',
                 workflow_data,
             })
             .eq('id', id)

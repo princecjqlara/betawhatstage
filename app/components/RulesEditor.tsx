@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { Save, Bot, Plus, Trash2, GripVertical, ToggleLeft, ToggleRight, Clock } from 'lucide-react';
+import { Save, Bot, Plus, Trash2, ToggleLeft, ToggleRight, Clock, MessageSquare } from 'lucide-react';
 
 interface Rule {
     id: string;
@@ -14,7 +14,9 @@ interface Rule {
 export default function RulesEditor() {
     const [botName, setBotName] = useState('');
     const [botTone, setBotTone] = useState('');
+    const [aiModel, setAiModel] = useState('qwen/qwen3-235b-a22b');
     const [humanTakeoverTimeout, setHumanTakeoverTimeout] = useState(5);
+    const [splitMessages, setSplitMessages] = useState(false);
     const [instructions, setInstructions] = useState('');
     const [rules, setRules] = useState<Rule[]>([]);
     const [newRule, setNewRule] = useState('');
@@ -33,8 +35,12 @@ export default function RulesEditor() {
             const data = await res.json();
             if (data.botName) setBotName(data.botName);
             if (data.botTone) setBotTone(data.botTone);
+            if (data.aiModel) setAiModel(data.aiModel);
             if (data.humanTakeoverTimeoutMinutes !== undefined) {
                 setHumanTakeoverTimeout(data.humanTakeoverTimeoutMinutes);
+            }
+            if (data.splitMessages !== undefined) {
+                setSplitMessages(data.splitMessages);
             }
         } catch (error) {
             console.error('Failed to fetch settings:', error);
@@ -68,7 +74,7 @@ export default function RulesEditor() {
                 fetch('/api/settings', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ botName, botTone, humanTakeoverTimeoutMinutes: humanTakeoverTimeout }),
+                    body: JSON.stringify({ botName, botTone, aiModel, humanTakeoverTimeoutMinutes: humanTakeoverTimeout, splitMessages }),
                 }),
                 fetch('/api/instructions', {
                     method: 'POST',
@@ -171,11 +177,22 @@ export default function RulesEditor() {
                                 <label className="block text-sm font-medium text-gray-700 ml-1">Tone & Personality</label>
                                 <input
                                     type="text"
-                                    value={botTone}
+                                    value={botName}
                                     onChange={(e) => setBotTone(e.target.value)}
                                     placeholder="e.g., Friendly, professional"
                                     className="w-full px-4 py-3 bg-gray-50 border-gray-100 border focus:bg-white rounded-xl text-gray-900 focus:outline-none focus:ring-2 focus:ring-teal-500/20 focus:border-teal-500 transition-all placeholder:text-gray-400"
                                 />
+                            </div>
+                            <div className="space-y-2 md:col-span-2">
+                                <label className="block text-sm font-medium text-gray-700 ml-1">AI Model</label>
+                                <select
+                                    value={aiModel}
+                                    onChange={(e) => setAiModel(e.target.value)}
+                                    className="w-full px-4 py-3 bg-gray-50 border-gray-100 border focus:bg-white rounded-xl text-gray-900 focus:outline-none focus:ring-2 focus:ring-teal-500/20 focus:border-teal-500 transition-all appearance-none"
+                                >
+                                    <option value="qwen/qwen3-235b-a22b">Qwen (Current) - qwen/qwen3-235b-a22b</option>
+                                    <option value="deepseek-ai/deepseek-v3.1">DeepSeek v3.1 - deepseek-ai/deepseek-v3.1</option>
+                                </select>
                             </div>
                         </div>
                     </div>
@@ -207,11 +224,46 @@ export default function RulesEditor() {
                         </div>
                     </div>
 
+                    {/* Split Messages Settings */}
+                    <div className="bg-white rounded-[24px] p-8 border border-gray-200/60 shadow-sm hover:shadow-md transition-shadow">
+                        <div className="flex items-start gap-4 mb-6">
+                            <div className="p-3 bg-purple-50 text-purple-600 rounded-2xl">
+                                <MessageSquare size={24} />
+                            </div>
+                            <div className="flex-1">
+                                <h3 className="text-lg font-medium text-gray-900">Split Messages</h3>
+                                <p className="text-gray-500 text-sm mt-1">
+                                    Send each sentence as a separate message for a more natural chat feel.
+                                </p>
+                            </div>
+                        </div>
+
+                        <div className="flex items-center justify-between bg-gray-50 p-4 rounded-2xl border border-gray-100">
+                            <div>
+                                <p className="text-gray-800 font-medium">Enable sentence splitting</p>
+                                <p className="text-gray-500 text-xs mt-1">
+                                    Instead of: &quot;Hello, kamusta po? Ano po ang name nyo?&quot;<br />
+                                    Sends: &quot;Hello, kamusta po?&quot; then &quot;Ano po ang name nyo?&quot;
+                                </p>
+                            </div>
+                            <button
+                                onClick={() => setSplitMessages(!splitMessages)}
+                                className={`p-2 rounded-lg transition-colors ${splitMessages
+                                    ? 'text-purple-600 bg-purple-100 hover:bg-purple-200'
+                                    : 'text-gray-400 bg-gray-200 hover:bg-gray-300'
+                                    }`}
+                                title={splitMessages ? 'Disable split messages' : 'Enable split messages'}
+                            >
+                                {splitMessages ? <ToggleRight size={28} /> : <ToggleLeft size={28} />}
+                            </button>
+                        </div>
+                    </div>
+
                     {/* Conversation Style Instructions */}
                     <div className="bg-white rounded-[24px] p-8 border border-gray-200/60 shadow-sm hover:shadow-md transition-shadow">
                         <div className="mb-6">
                             <h3 className="text-xl font-normal text-gray-900 mb-2">Conversation Style Instructions</h3>
-                            <p className="text-gray-500 text-sm">Define how the bot should converse, including tone and specific dos/don'ts.</p>
+                            <p className="text-gray-500 text-sm">Define how the bot should converse, including tone and specific dos/don&apos;ts.</p>
                         </div>
                         <div className="relative">
                             <textarea
@@ -267,7 +319,7 @@ export default function RulesEditor() {
                                         <Bot size={24} className="text-gray-300" />
                                     </div>
                                     <p className="text-gray-500 font-medium">No rules added yet</p>
-                                    <p className="text-sm text-gray-400 mt-1">Add rules above to guide your bot's behavior.</p>
+                                    <p className="text-sm text-gray-400 mt-1">Add rules above to guide your bot&apos;s behavior.</p>
                                 </div>
                             ) : (
                                 rules.map((rule, index) => (

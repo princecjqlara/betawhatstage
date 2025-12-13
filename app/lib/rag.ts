@@ -81,6 +81,18 @@ export async function addDocument(content: string, metadata: any = {}) {
     }
 }
 
+// ... (add definition at the top or here if possible) 
+// Actually I need to add the interface definition.
+// I'll add it before searchDocuments
+
+interface StoredDocument {
+    id: number;
+    content: string;
+    metadata: Record<string, unknown>;
+    embedding?: number[];
+    source?: string;
+}
+
 /**
  * Simplified but RELIABLE retrieval
  * Strategy: 
@@ -104,7 +116,7 @@ export async function searchDocuments(query: string, limit: number = 5) {
         }
 
         // STRATEGY 2: Semantic search with embedding
-        let semanticDocs: any[] = [];
+        let semanticDocs: StoredDocument[] = [];
         try {
             const queryEmbedding = await getEmbedding(query, 'query');
 
@@ -115,14 +127,14 @@ export async function searchDocuments(query: string, limit: number = 5) {
             });
 
             if (!matchError && matchedDocs) {
-                semanticDocs = matchedDocs;
+                semanticDocs = matchedDocs as StoredDocument[];
             }
         } catch (embError) {
             console.error('Embedding search failed:', embError);
         }
 
         // STRATEGY 3: Keyword search for price-related queries
-        let keywordDocs: any[] = [];
+        let keywordDocs: StoredDocument[] = [];
         const lowerQuery = query.toLowerCase();
         const isPriceQuery = lowerQuery.includes('price') ||
             lowerQuery.includes('cost') ||
@@ -139,12 +151,12 @@ export async function searchDocuments(query: string, limit: number = 5) {
                 .limit(5);
 
             if (!priceError && priceDocs) {
-                keywordDocs = priceDocs;
+                keywordDocs = priceDocs as StoredDocument[];
             }
         }
 
         // Combine all results and deduplicate
-        const allDocs: any[] = [];
+        const allDocs: StoredDocument[] = [];
         const seenIds = new Set<number>();
 
         // Add semantic results first (highest relevance)

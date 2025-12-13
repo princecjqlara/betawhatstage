@@ -62,10 +62,19 @@ export async function GET(req: Request) {
                     .eq('id', execution.id);
 
                 const workflowData = (execution.workflows as any).workflow_data;
-                await continueExecution(execution.id, workflowData, {
+                const executionData = execution.execution_data as any || {};
+
+                // Build context, restoring appointment data if present
+                const context = {
                     leadId: execution.lead_id,
                     senderId: lead.sender_id,
-                });
+                    appointmentId: executionData.appointmentId || execution.appointment_id,
+                    appointmentDateTime: executionData.appointmentDateTime
+                        ? new Date(executionData.appointmentDateTime)
+                        : undefined,
+                };
+
+                await continueExecution(execution.id, workflowData, context);
 
                 console.log('Processed execution:', execution.id);
             } catch (execError) {

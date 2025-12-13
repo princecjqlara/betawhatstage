@@ -99,3 +99,34 @@ export async function getPaymentMethods(): Promise<PaymentMethod[]> {
         return [];
     }
 }
+
+// Fetch a single product by ID with its variations count
+export async function getProductById(productId: string): Promise<{ product: Product | null; hasVariations: boolean }> {
+    try {
+        const { data: product, error: productError } = await supabase
+            .from('products')
+            .select('*')
+            .eq('id', productId)
+            .single();
+
+        if (productError || !product) {
+            return { product: null, hasVariations: false };
+        }
+
+        // Check if product has variations
+        const { count, error: variationsError } = await supabase
+            .from('product_variations')
+            .select('*', { count: 'exact', head: true })
+            .eq('product_id', productId);
+
+        if (variationsError) {
+            console.error('Error checking variations:', variationsError);
+            return { product, hasVariations: false };
+        }
+
+        return { product, hasVariations: (count || 0) > 0 };
+    } catch (error) {
+        console.error('Error fetching product by ID:', error);
+        return { product: null, hasVariations: false };
+    }
+}

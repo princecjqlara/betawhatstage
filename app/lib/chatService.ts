@@ -379,41 +379,65 @@ export async function getBotResponse(
     console.log('[RAG CONTEXT]:', context ? context.substring(0, 500) + '...' : 'NO CONTEXT RETRIEVED');
 
 
+    // Check what's available in the catalog to conditionally enable tools
+    const hasProducts = catalogContext && catalogContext.includes('PRODUCT CATALOG:');
+    const hasProperties = catalogContext && catalogContext.includes('PROPERTY LISTINGS:');
+
+    // Build dynamic UI TOOLS list
+    let uiToolsList = '';
+    let examplesList = '';
+
+    if (hasProducts) {
+        uiToolsList += `- [SHOW_PRODUCTS] : When user asks to see items/products or looking for recommendations.\n`;
+        uiToolsList += `- [SHOW_CART] : When user asks to see their cart, order, or what they've added. Example: "ano na sa cart ko?" / "what's in my cart?"\n`;
+        uiToolsList += `- [REMOVE_CART:product_name] : When user wants to REMOVE an item from their cart. Replace "product_name" with the actual product name they want removed.\n`;
+
+        examplesList += `- Example: "Yes, meron kaming available. Check mo dito: [SHOW_PRODUCTS]"\n`;
+        examplesList += `- Example: "Okay po, aalisin ko na yan sa cart mo. [REMOVE_CART:Product Name Here]"\n`;
+    }
+
+    if (hasProperties) {
+        uiToolsList += `- [SHOW_PROPERTIES] : When user asks about houses, lots, or properties for sale/rent.\n`;
+        examplesList += `- Example: "Meron kaming available na properties. [SHOW_PROPERTIES]"\n`;
+    }
+
+    // General tools always available
+    uiToolsList += `- [SHOW_BOOKING] : When user wants to schedule a visit, appointment, or consultation.\n`;
+    uiToolsList += `- [SHOW_PAYMENT_METHODS] : When user asks how to pay or asks for bank details.\n`;
+
+    examplesList += `- Example: "Pwede tayo mag-schedule. [SHOW_BOOKING]"`;
+
     // Build a clear system prompt optimized for Llama 3.1
-    let systemPrompt = `You are ${botName}, a friendly Filipino salesperson. Your style: ${botTone}.
+    let systemPrompt = `You are ${botName}. Your style: ${botTone}.
 
 STYLE: Use Taglish, keep messages short, use 1-2 emojis max.
 
 UI TOOLS (Use these tags when relevant):
-- [SHOW_PRODUCTS] : When user asks to see items/products or looking for recommendations.
-- [SHOW_PROPERTIES] : When user asks about houses, lots, or properties for sale/rent.
-- [SHOW_BOOKING] : When user wants to schedule a visit, appointment, or consultation.
-- [SHOW_PAYMENT_METHODS] : When user asks how to pay or asks for bank details.
-- [SHOW_CART] : When user asks to see their cart, order, or what they've added. Example: "ano na sa cart ko?" / "what's in my cart?"
-- [REMOVE_CART:product_name] : When user wants to REMOVE an item from their cart. Replace "product_name" with the actual product name they want removed.
-
+${uiToolsList}
 
 IMPORTANT: 
 - Answer the user's question FIRST, then add the appropriate tag at the end.
-- You can recommend checking products/properties if it fits the conversation.
-- Example 1: "Yes, meron kaming available. Check mo dito: [SHOW_PRODUCTS]"
-- Example 2: "Pwede tayo mag-schedule ng tripping. [SHOW_BOOKING]"
-- Example 3 (remove from cart): "Okay po, aalisin ko na yan sa cart mo. [REMOVE_CART:Product Name Here]"
-- Example 4 (show cart): "Eto po yung laman ng cart mo: [SHOW_CART]"
+- You can recommend checking products/properties ONLY if they are available and relevant.
+${examplesList}
 
 CRITICAL RULES:
 - DO NOT generate links like [LINK], [LINK_TO_BOOKING], or any URL. Use the UI TOOLS tags above instead.
 - DO NOT sign off your messages (e.g., "WhatStage PH", "Galaxy Coffee"). Just send the message.
-- DO NOT mention "15/day package" or "subscribe" unless explicitly in the catalog.
 - If asking to book/schedule, ALWAYS use [SHOW_BOOKING]. DO NOT say "click this link".
+- DO NOT list options if you don't have their specific names. NEVER say "Pwede kang mag-choose: , , ,".
+`;
 
+    if (hasProducts) {
+        systemPrompt += `
 CART REMOVAL DETECTION:
 When a customer says things like:
 - "wag na po yung..." / "alisin mo na yung..." / "remove..." / "tanggalin..."
 - "ayoko na ng..." / "cancel ko yung..."
 Use the [REMOVE_CART:product_name] tag with the product name they mentioned.
-
 `;
+    }
+
+    systemPrompt += `\n`;
 
     // Add instructions from database if available
     if (instructions) {
@@ -426,26 +450,32 @@ Use the [REMOVE_CART:product_name] tag with the product name they mentioned.
         systemPrompt += `RULES:\n${rules.join('\n')}\n\n`;
     }
 
-    // Add product/property catalog context
-    if (catalogContext && catalogContext.trim().length > 0) {
-        systemPrompt += `${catalogContext}
-
-IMPORTANT: Use the EXACT prices and details from the catalog above when answering customer questions about products, properties, or payment methods.
-
-`;
-    }
-
-    // Add knowledge base FIRST with clear instruction
+    // Add knowledge base FIRST (HIGHEST PRIORITY)
     if (context && context.trim().length > 0) {
-        systemPrompt += `REFERENCE DATA:
+        systemPrompt += `PRIORITY SOURCE - REFERENCE DATA (Knowledge Base):
 ${context}
 
-IMPORTANT: When asked about price/magkano/cost, use the EXACT price above.
-Do NOT make up prices or add details not in the reference data.
+IMPORTANT: 
+- This is your PRIMARY source of truth. 
+- When asked about price/magkano/cost, use the EXACT price above.
+- Do NOT make up prices or add details not in the reference data.
 
 `;
     } else {
         systemPrompt += `NOTE: No reference data available. If asked for specific prices or details, say "Ipa-check ko muna sa team."
+
+`;
+    }
+
+    // Add product/property catalog context (SECONDARY PRIORITY)
+    if (catalogContext && catalogContext.trim().length > 0) {
+        systemPrompt += `SECONDARY SOURCE - PRODUCT/PROPERTY CATALOG:
+${catalogContext}
+
+IMPORTANT: 
+- Use this ONLY if the user explicitly asks about products, properties, or items for sale.
+- Do NOT proactively offer products/properties if the user is asking about general topics or from the Reference Data above.
+- Use the EXACT prices and details from the catalog above when answering.
 
 `;
     }

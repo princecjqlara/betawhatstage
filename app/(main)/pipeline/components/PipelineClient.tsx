@@ -15,6 +15,7 @@ interface Lead {
     message_count: number;
     last_message_at: string | null;
     ai_classification_reason: string | null;
+    profile_pic: string | null;
     stageId?: string; // Augmented for list view filtering
 }
 

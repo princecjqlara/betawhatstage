@@ -12,6 +12,7 @@ interface Lead {
     message_count: number;
     last_message_at: string | null;
     ai_classification_reason: string | null;
+    profile_pic: string | null;
 }
 
 interface LeadCardProps {
@@ -86,12 +87,20 @@ export default function LeadCard({ lead, index, onMoveClick, moveMenuOpen, onCli
                                 <GripVertical size={14} />
                             </div>
 
-                            <div
-                                className="w-10 h-10 rounded-full flex items-center justify-center text-white text-sm font-bold shadow-sm ring-2 ring-white"
-                                style={{ backgroundColor: stringToColor(lead.sender_id) }}
-                            >
-                                {(lead.name || lead.sender_id)?.[0]?.toUpperCase() || '?'}
-                            </div>
+                            {lead.profile_pic ? (
+                                <img
+                                    src={lead.profile_pic}
+                                    alt={lead.name || 'User'}
+                                    className="w-10 h-10 rounded-full object-cover shadow-sm ring-2 ring-white"
+                                />
+                            ) : (
+                                <div
+                                    className="w-10 h-10 rounded-full flex items-center justify-center text-white text-sm font-bold shadow-sm ring-2 ring-white"
+                                    style={{ backgroundColor: stringToColor(lead.sender_id) }}
+                                >
+                                    {(lead.name || lead.sender_id)?.[0]?.toUpperCase() || '?'}
+                                </div>
+                            )}
 
                             <div>
                                 <h4 className="text-sm font-bold text-gray-900 leading-tight">

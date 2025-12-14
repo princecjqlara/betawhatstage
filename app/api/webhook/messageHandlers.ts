@@ -621,8 +621,14 @@ export async function handleMessage(sender_psid: string, received_message: strin
                     }, pageId);
                 } else {
                     await callSendAPI(sender_psid, {
-                        text: '🛒 Wala pa pong laman ang cart mo. Gusto mo bang tumingin ng products? [SHOW_PRODUCTS]'
+                        text: '🛒 Wala pa pong laman ang cart mo. Gusto mo bang tumingin ng products?'
                     }, pageId);
+
+                    // Manually trigger product cards since we removed the tag
+                    const products = await getProducts();
+                    if (products.length > 0) {
+                        await sendProductCards(sender_psid, products, pageId);
+                    }
                 }
             } catch (error) {
                 console.error('Error fetching cart:', error);

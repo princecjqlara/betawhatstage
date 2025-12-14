@@ -10,6 +10,7 @@ interface Lead {
     message_count: number;
     last_message_at: string | null;
     ai_classification_reason: string | null;
+    profile_pic: string | null;
 }
 
 interface Stage {
@@ -86,12 +87,20 @@ export default function ListView({ stages, onMoveLead }: ListViewProps) {
                             <tr key={lead.id} className="hover:bg-gray-50/50 transition-colors group">
                                 <td className="px-6 py-4">
                                     <div className="flex items-center gap-3">
-                                        <div
-                                            className="w-8 h-8 rounded-full flex items-center justify-center text-white text-xs font-bold shadow-sm"
-                                            style={{ backgroundColor: stringToColor(lead.sender_id) }}
-                                        >
-                                            {(lead.name || lead.sender_id)?.[0]?.toUpperCase() || '?'}
-                                        </div>
+                                        {lead.profile_pic ? (
+                                            <img
+                                                src={lead.profile_pic}
+                                                alt={lead.name || 'User'}
+                                                className="w-8 h-8 rounded-full object-cover shadow-sm"
+                                            />
+                                        ) : (
+                                            <div
+                                                className="w-8 h-8 rounded-full flex items-center justify-center text-white text-xs font-bold shadow-sm"
+                                                style={{ backgroundColor: stringToColor(lead.sender_id) }}
+                                            >
+                                                {(lead.name || lead.sender_id)?.[0]?.toUpperCase() || '?'}
+                                            </div>
+                                        )}
                                         <div>
                                             <p className="text-sm font-semibold text-gray-900">
                                                 {lead.name || `User ${lead.sender_id.slice(-4)}`}

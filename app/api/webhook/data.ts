@@ -130,3 +130,24 @@ export async function getProductById(productId: string): Promise<{ product: Prod
         return { product: null, hasVariations: false };
     }
 }
+
+// Fetch a single property by ID
+export async function getPropertyById(propertyId: string): Promise<Property | null> {
+    try {
+        const { data: property, error } = await supabase
+            .from('properties')
+            .select('*')
+            .eq('id', propertyId)
+            .single();
+
+        if (error || !property) {
+            console.log('Property not found:', propertyId, error);
+            return null;
+        }
+
+        return property;
+    } catch (error) {
+        console.error('Error fetching property by ID:', error);
+        return null;
+    }
+}

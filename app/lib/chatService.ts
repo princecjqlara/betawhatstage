@@ -552,11 +552,13 @@ export async function getBotResponse(
 
     // Only show product tools if products exist AND user hasn't just completed an order
     if (hasProducts && !recentOrder) {
-        uiToolsList += `- [SHOW_PRODUCTS] : When user asks to see items/products or looking for recommendations.\n`;
+        uiToolsList += `- [SHOW_PRODUCTS] : When user wants to BROWSE ALL products/items available.\n`;
+        uiToolsList += `- [RECOMMEND_PRODUCT:product_id] : When recommending a SPECIFIC product based on user preferences. Use the exact product ID from the catalog.\n`;
         uiToolsList += `- [SHOW_CART] : When user asks to see their cart, order, or what they've added. Example: "ano na sa cart ko?" / "what's in my cart?"\n`;
         uiToolsList += `- [REMOVE_CART:product_name] : When user wants to REMOVE an item from their cart. Replace "product_name" with the actual product name they want removed.\n`;
 
-        examplesList += `- Example: "Yes, meron kaming available. Check mo dito: [SHOW_PRODUCTS]"\n`;
+        examplesList += `- Example (browse all): "Yes, meron kaming available. Check mo dito: [SHOW_PRODUCTS]"\n`;
+        examplesList += `- Example (specific recommendation): "Based sa preferences mo, try mo to: [RECOMMEND_PRODUCT:abc123-uuid-here]"\n`;
         examplesList += `- Example: "Okay po, aalisin ko na yan sa cart mo. [REMOVE_CART:Product Name Here]"\n`;
     } else if (hasProducts && recentOrder) {
         // Still allow cart tools but hide SHOW_PRODUCTS from proactive suggestions
@@ -565,8 +567,10 @@ export async function getBotResponse(
     }
 
     if (hasProperties) {
-        uiToolsList += `- [SHOW_PROPERTIES] : When user asks about houses, lots, or properties for sale/rent. This shows a visual card - DO NOT also list property details in text.\n`;
-        examplesList += `- Example: "Meron kaming available na properties! Check mo: [SHOW_PROPERTIES]" (SHORT - no details in text)\n`;
+        uiToolsList += `- [SHOW_PROPERTIES] : When user wants to BROWSE ALL properties available. This shows a visual card carousel.\n`;
+        uiToolsList += `- [RECOMMEND_PROPERTY:property_id] : When recommending a SPECIFIC property based on user preferences (bedrooms, budget, location). Use the exact property ID from the catalog. Shows only that one property card.\n`;
+        examplesList += `- Example (browse all): "Meron kaming available na properties! Check mo: [SHOW_PROPERTIES]"\n`;
+        examplesList += `- Example (specific recommendation): "Base sa budget mo, try mo tingnan to: [RECOMMEND_PROPERTY:abc123-uuid-here]"\n`;
     }
 
     // General tools - conditionally show booking based on recent activity
@@ -594,6 +598,9 @@ CRITICAL RULES:
 - DO NOT sign off your messages (e.g., "WhatStage PH", "Galaxy Coffee"). Just send the message.
 - If asking to book/schedule, ALWAYS use [SHOW_BOOKING]. DO NOT say "click this link".
 - DO NOT list options if you don't have their specific names. NEVER say "Pwede kang mag-choose: , , ,".
+- When user asks about a SPECIFIC product/property by name or describes their preferences, use [RECOMMEND_PRODUCT:id] or [RECOMMEND_PROPERTY:id] with the matching item's ID from the catalog.
+- When user wants to see ALL available items, use [SHOW_PRODUCTS] or [SHOW_PROPERTIES].
+- Keep your text message SHORT when using recommendation tags - the card will show all the details.
 `;
 
     // Inject goal-driven context

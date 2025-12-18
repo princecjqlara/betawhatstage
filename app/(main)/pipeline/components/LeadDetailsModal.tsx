@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { X, Calendar, ShoppingCart, Activity, Phone, Mail, MessageCircle, Clock, CheckCircle, AlertCircle, User, CreditCard, ShoppingBag, FileText, Brain, Bot } from 'lucide-react';
+import { X, Calendar, ShoppingCart, Activity, Phone, Mail, MessageCircle, Clock, CheckCircle, AlertCircle, User, CreditCard, ShoppingBag, FileText, Brain, Bot, UserX, Play } from 'lucide-react';
 import MemoryTab from './MemoryTab';
 import ResponseFeedback from '@/app/components/ResponseFeedback';
 
@@ -26,6 +26,48 @@ export default function LeadDetailsModal({ isOpen, onClose, leadId, initialLeadD
     const [data, setData] = useState<LeadDetails | null>(null);
     const [loading, setLoading] = useState(false);
     const [conversations, setConversations] = useState<any[]>([]);
+    const [takeoverActive, setTakeoverActive] = useState(false);
+    const [takeoverLoading, setTakeoverLoading] = useState(false);
+
+    // Start human takeover - pauses the bot for this lead
+    const handleStartTakeover = async () => {
+        if (!data?.lead?.sender_id) return;
+        setTakeoverLoading(true);
+        try {
+            const res = await fetch('/api/leads/takeover', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ senderId: data.lead.sender_id, action: 'start' }),
+            });
+            if (res.ok) {
+                setTakeoverActive(true);
+            }
+        } catch (error) {
+            console.error('Failed to start takeover:', error);
+        } finally {
+            setTakeoverLoading(false);
+        }
+    };
+
+    // Resume AI - ends the takeover
+    const handleResumeAI = async () => {
+        if (!data?.lead?.sender_id) return;
+        setTakeoverLoading(true);
+        try {
+            const res = await fetch('/api/leads/takeover', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ senderId: data.lead.sender_id, action: 'end' }),
+            });
+            if (res.ok) {
+                setTakeoverActive(false);
+            }
+        } catch (error) {
+            console.error('Failed to resume AI:', error);
+        } finally {
+            setTakeoverLoading(false);
+        }
+    };
 
     useEffect(() => {
         if (isOpen && leadId) {
@@ -50,6 +92,13 @@ export default function LeadDetailsModal({ isOpen, onClose, leadId, initialLeadD
                     if (convRes.ok) {
                         const convData = await convRes.json();
                         setConversations(convData || []);
+                    }
+
+                    // Check if takeover is currently active
+                    const takeoverRes = await fetch(`/api/leads/takeover?senderId=${details.lead.sender_id}`);
+                    if (takeoverRes.ok) {
+                        const takeoverData = await takeoverRes.json();
+                        setTakeoverActive(takeoverData.active || false);
                     }
                 }
 
@@ -148,6 +197,34 @@ export default function LeadDetailsModal({ isOpen, onClose, leadId, initialLeadD
                                             <Phone size={16} className="text-green-500" />
                                             Call
                                         </button>
+                                    </div>
+
+                                    {/* Human Takeover Button */}
+                                    <div className="w-full mt-3">
+                                        {takeoverActive ? (
+                                            <button
+                                                onClick={handleResumeAI}
+                                                disabled={takeoverLoading}
+                                                className="w-full flex items-center justify-center gap-2 py-2.5 bg-emerald-50 border border-emerald-200 rounded-xl text-sm font-semibold text-emerald-700 hover:bg-emerald-100 transition-all disabled:opacity-50"
+                                            >
+                                                <Play size={16} />
+                                                {takeoverLoading ? 'Resuming...' : 'Resume AI Bot'}
+                                            </button>
+                                        ) : (
+                                            <button
+                                                onClick={handleStartTakeover}
+                                                disabled={takeoverLoading}
+                                                className="w-full flex items-center justify-center gap-2 py-2.5 bg-orange-50 border border-orange-200 rounded-xl text-sm font-semibold text-orange-700 hover:bg-orange-100 transition-all disabled:opacity-50"
+                                            >
+                                                <UserX size={16} />
+                                                {takeoverLoading ? 'Starting...' : 'Take Over (Pause Bot)'}
+                                            </button>
+                                        )}
+                                        {takeoverActive && (
+                                            <p className="text-xs text-orange-600 text-center mt-2">
+                                                🔴 Bot paused. Reply via Facebook Inbox.
+                                            </p>
+                                        )}
                                     </div>
                                 </div>
 
@@ -492,8 +569,8 @@ export default function LeadDetailsModal({ isOpen, onClose, leadId, initialLeadD
                                                             <div className={`max-w-[70%] group relative ${msg.role === 'user' ? 'order-first' : ''}`}>
                                                                 <div
                                                                     className={`px-4 py-2 rounded-2xl text-sm ${msg.role === 'user'
-                                                                            ? 'bg-gray-900 text-white rounded-br-none'
-                                                                            : 'bg-white border border-gray-200 text-gray-800 rounded-bl-none shadow-sm'
+                                                                        ? 'bg-gray-900 text-white rounded-br-none'
+                                                                        : 'bg-white border border-gray-200 text-gray-800 rounded-bl-none shadow-sm'
                                                                         }`}
                                                                 >
                                                                     {msg.content}

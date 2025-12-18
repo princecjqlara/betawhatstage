@@ -741,7 +741,8 @@ CREATE INDEX IF NOT EXISTS idx_lead_entities_type ON lead_entities(entity_type);
 -- Enable RLS
 ALTER TABLE lead_entities ENABLE ROW LEVEL SECURITY;
 
--- Policy to allow all operations
+-- Policy to allow all operations (drop first to avoid duplicate error)
+DROP POLICY IF EXISTS "Allow all operations on lead_entities" ON lead_entities;
 CREATE POLICY "Allow all operations on lead_entities" ON lead_entities
   FOR ALL USING (true) WITH CHECK (true);
 
@@ -782,7 +783,8 @@ CREATE INDEX IF NOT EXISTS idx_human_takeover_sender ON human_takeover_sessions(
 -- Enable RLS
 ALTER TABLE human_takeover_sessions ENABLE ROW LEVEL SECURITY;
 
--- Policy to allow all operations
+-- Policy to allow all operations (drop first to avoid duplicate error)
+DROP POLICY IF EXISTS "Allow all operations on human_takeover_sessions" ON human_takeover_sessions;
 CREATE POLICY "Allow all operations on human_takeover_sessions" ON human_takeover_sessions
   FOR ALL USING (true) WITH CHECK (true);
 

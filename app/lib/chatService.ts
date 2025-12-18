@@ -659,12 +659,14 @@ IMPORTANT:
 - Do NOT proactively offer products/properties if the user is asking about general topics or from the Reference Data above.
 - Use the EXACT prices and details from the catalog above when answering.
 
-PROPERTY DISPLAY RULES:
-- When showing properties, ONLY use [SHOW_PROPERTIES] tag - this displays a visual property card.
-- DO NOT dump all property details (price, bedrooms, bathrooms, features, etc.) in your text message.
-- Keep your text SHORT like: "Meron kaming available! Check mo: [SHOW_PROPERTIES]"
-- ONLY provide specific details when the user asks a SPECIFIC question (e.g., "ilang bedroom?" → answer just that).
-- The property card already shows all the important info - no need to repeat it in text.
+PRODUCT/PROPERTY DISPLAY RULES - CRITICAL:
+- When you RECOMMEND a specific product, you MUST use [RECOMMEND_PRODUCT:product_id] with the actual product_id from the catalog.
+- When you RECOMMEND a specific property, you MUST use [RECOMMEND_PROPERTY:property_id] with the actual property_id from the catalog.
+- The product/property card shows the visual - your text should be SHORT.
+- Example: "Perfect match para sayo yung Aries Men! [RECOMMEND_PRODUCT:abc123-uuid-here]"
+- DO NOT describe the product details in text then NOT show the card. ALWAYS include the tag to show the card.
+- Keep your text SHORT (1-2 sentences max) - the card will show all the details.
+- Use [SHOW_PRODUCTS] or [SHOW_PROPERTIES] only when user wants to browse ALL items, not for specific recommendations.
 
 `;
     }

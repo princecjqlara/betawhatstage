@@ -102,6 +102,7 @@ async function getProductContext(): Promise<string> {
 
         // Build formatted text
         let context = 'PRODUCT CATALOG:\n';
+        context += 'NOTE: Use [RECOMMEND_PRODUCT:id] with the product_id to show a specific product card.\n';
 
         products.forEach((product, index: number) => {
             const priceStr = product.price
@@ -109,6 +110,7 @@ async function getProductContext(): Promise<string> {
                 : 'Price varies';
 
             context += `\n${index + 1}. ${product.name} - ${priceStr}`;
+            context += `\n   product_id: ${product.id}`;  // Add ID for AI to use
 
             const category = Array.isArray(product.category) ? product.category[0] : product.category;
             if (category?.name) {
@@ -169,6 +171,7 @@ async function getPropertyContext(): Promise<string> {
         }
 
         let context = 'PROPERTY LISTINGS:\n';
+        context += 'NOTE: Use [RECOMMEND_PROPERTY:id] with the property_id to show a specific property card.\n';
 
         properties.forEach((prop: Property, index: number) => {
             const priceStr = prop.price
@@ -176,6 +179,7 @@ async function getPropertyContext(): Promise<string> {
                 : 'Price on request';
 
             context += `\n${index + 1}. ${prop.title} - ${priceStr}`;
+            context += `\n   property_id: ${prop.id}`;  // Add ID for AI to use
 
             if (prop.property_type) {
                 context += `\n   Type: ${prop.property_type}`;

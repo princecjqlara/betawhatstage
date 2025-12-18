@@ -393,6 +393,22 @@ export async function handlePostback(postback: any, sender_psid: string, recipie
         return true;
     }
 
+    // Handle Show Products postback (Continue Shopping button)
+    if (postback.payload === 'SHOW_PRODUCTS') {
+        console.log('Show Products Postback received');
+
+        const products = await getProducts();
+        if (products.length > 0) {
+            await sendProductCards(sender_psid, products, recipient_psid);
+        } else {
+            await callSendAPI(sender_psid, {
+                text: "Sorry, there are no products available at the moment. 😔"
+            }, recipient_psid);
+        }
+
+        return true;
+    }
+
     return false;
 }
 

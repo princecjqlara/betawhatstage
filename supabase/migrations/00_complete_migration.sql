@@ -150,6 +150,8 @@ CREATE TABLE IF NOT EXISTS bot_settings (
   facebook_verify_token TEXT DEFAULT 'TEST_TOKEN',
   facebook_page_access_token TEXT,
   human_takeover_timeout_minutes INT DEFAULT 5,
+  primary_goal TEXT DEFAULT 'lead_generation' CHECK (primary_goal IN ('lead_generation', 'appointment_booking', 'tripping', 'purchase')),
+  auto_follow_up_enabled BOOLEAN DEFAULT false,
   created_at TIMESTAMPTZ DEFAULT NOW(),
   updated_at TIMESTAMPTZ DEFAULT NOW()
 );
@@ -165,6 +167,10 @@ ALTER TABLE bot_settings ENABLE ROW LEVEL SECURITY;
 -- Policy
 CREATE POLICY "Allow all operations on bot_settings" ON bot_settings
   FOR ALL USING (true) WITH CHECK (true);
+
+-- Comments
+COMMENT ON COLUMN bot_settings.primary_goal IS 'Primary bot objective: lead_generation, appointment_booking, tripping (real estate), or purchase (e-commerce)';
+COMMENT ON COLUMN bot_settings.auto_follow_up_enabled IS 'When true, the bot will automatically send follow-up messages to inactive leads';
 
 -- ============================================================================
 -- PART 5: BOT RULES TABLE

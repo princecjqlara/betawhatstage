@@ -370,8 +370,21 @@ Generate ONLY the follow-up message, nothing else:`;
 // CORE FOLLOW-UP LOGIC
 // ============================================================================
 
+// Pipeline stages that should exclude leads from follow-up
+const EXCLUDED_STAGE_NAMES = ['Won', 'Appointment Scheduled', 'Delivered', 'Closed'];
+
+// Order statuses that indicate an active/ongoing order
+const ACTIVE_ORDER_STATUSES = ['pending', 'confirmed', 'processing', 'shipped'];
+
+// Appointment statuses that indicate an active/upcoming appointment
+const ACTIVE_APPOINTMENT_STATUSES = ['pending', 'confirmed'];
+
 /**
  * Get all leads that need a follow-up right now
+ * Excludes leads who:
+ * - Have already bought (Won/Delivered stage)
+ * - Have booked an appointment (Appointment Scheduled stage or upcoming appointment)
+ * - Have an ongoing order (active order status)
  */
 export async function getLeadsNeedingFollowUp(limit: number = 10): Promise<Lead[]> {
     const settings = await getFollowUpSettings();
@@ -381,37 +394,105 @@ export async function getLeadsNeedingFollowUp(limit: number = 10): Promise<Lead[
         return [];
     }
 
-    const now = new Date().toISOString();
+    const now = new Date();
+    const nowIso = now.toISOString();
+    const todayDate = now.toISOString().split('T')[0]; // YYYY-MM-DD format
 
-    // Find leads where:
-    // 1. follow_up_enabled = true
-    // 2. next_follow_up_at <= now
-    // 3. Bot has messaged (last_bot_message_at is set)
-    // 4. Customer hasn't replied since (last_customer_message_at < last_bot_message_at OR null)
-    const { data: leads, error } = await supabase
+    // Step 1: Get IDs of excluded pipeline stages
+    const { data: excludedStages } = await supabase
+        .from('pipeline_stages')
+        .select('id, name')
+        .in('name', EXCLUDED_STAGE_NAMES);
+
+    const excludedStageIds = (excludedStages || []).map(s => s.id);
+    console.log(`[FollowUp] Excluded stages: ${excludedStages?.map(s => s.name).join(', ') || 'none'}`);
+
+    // Step 2: Get sender_ids of leads with active orders
+    const { data: activeOrders } = await supabase
+        .from('orders')
+        .select('lead_id, leads!inner(sender_id)')
+        .in('status', ACTIVE_ORDER_STATUSES);
+
+    const senderIdsWithActiveOrders = new Set(
+        (activeOrders || [])
+            .map(o => {
+                // Supabase returns the joined lead data - extract sender_id safely
+                const leadData = o.leads as unknown as { sender_id: string } | null;
+                return leadData?.sender_id;
+            })
+            .filter((id): id is string => Boolean(id))
+    );
+    console.log(`[FollowUp] Leads with active orders: ${senderIdsWithActiveOrders.size}`);
+
+    // Step 3: Get sender_ids of leads with upcoming appointments
+    const { data: upcomingAppointments } = await supabase
+        .from('appointments')
+        .select('sender_psid')
+        .in('status', ACTIVE_APPOINTMENT_STATUSES)
+        .gte('appointment_date', todayDate);
+
+    const senderIdsWithAppointments = new Set(
+        (upcomingAppointments || []).map(a => a.sender_psid)
+    );
+    console.log(`[FollowUp] Leads with upcoming appointments: ${senderIdsWithAppointments.size}`);
+
+    // Step 4: Query leads with basic filters
+    let query = supabase
         .from('leads')
-        .select('id, sender_id, name, follow_up_count, last_bot_message_at, last_customer_message_at, next_follow_up_at, follow_up_enabled')
+        .select('id, sender_id, name, follow_up_count, last_bot_message_at, last_customer_message_at, next_follow_up_at, follow_up_enabled, current_stage_id')
         .eq('follow_up_enabled', true)
         .eq('bot_disabled', false)
         .not('next_follow_up_at', 'is', null)
-        .lte('next_follow_up_at', now)
+        .lte('next_follow_up_at', nowIso)
         .order('next_follow_up_at', { ascending: true })
-        .limit(limit);
+        .limit(limit * 3); // Fetch more to account for filtering
+
+    const { data: leads, error } = await query;
 
     if (error) {
         console.error('[FollowUp] Error fetching leads:', error);
         return [];
     }
 
-    // Filter to ensure bot message is more recent than customer message
+    // Step 5: Filter out excluded leads
     const filtered = (leads || []).filter(lead => {
-        if (!lead.last_bot_message_at) return false;
-        if (!lead.last_customer_message_at) return true; // Never replied
-        return new Date(lead.last_bot_message_at) > new Date(lead.last_customer_message_at);
+        // Check 1: Bot must have messaged
+        if (!lead.last_bot_message_at) {
+            return false;
+        }
+
+        // Check 2: Customer hasn't replied since bot's last message
+        if (lead.last_customer_message_at &&
+            new Date(lead.last_customer_message_at) > new Date(lead.last_bot_message_at)) {
+            return false;
+        }
+
+        // Check 3: Not in an excluded pipeline stage (bought, appointment scheduled, etc.)
+        if (lead.current_stage_id && excludedStageIds.includes(lead.current_stage_id)) {
+            console.log(`[FollowUp] Excluding ${lead.name || lead.sender_id}: in excluded stage`);
+            return false;
+        }
+
+        // Check 4: No active orders
+        if (senderIdsWithActiveOrders.has(lead.sender_id)) {
+            console.log(`[FollowUp] Excluding ${lead.name || lead.sender_id}: has active order`);
+            return false;
+        }
+
+        // Check 5: No upcoming appointments
+        if (senderIdsWithAppointments.has(lead.sender_id)) {
+            console.log(`[FollowUp] Excluding ${lead.name || lead.sender_id}: has upcoming appointment`);
+            return false;
+        }
+
+        return true;
     });
 
-    console.log(`[FollowUp] Found ${filtered.length} leads needing follow-up`);
-    return filtered as Lead[];
+    // Limit to requested number after filtering
+    const result = filtered.slice(0, limit);
+
+    console.log(`[FollowUp] Found ${result.length} leads needing follow-up (after exclusions)`);
+    return result as Lead[];
 }
 
 /**

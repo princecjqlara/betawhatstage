@@ -129,7 +129,7 @@ export default function DigitalProductClient({ product: initialProduct, initialF
 
     // Get fields for current step
     const getCurrentStepFields = () => {
-        return formFields.filter(f => f.step_number === currentStep);
+        return formFields.filter(f => (f.step_number || 1) === currentStep);
     };
 
     // Validate current step before proceeding

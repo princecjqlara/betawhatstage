@@ -65,17 +65,27 @@ async function getDigitalProduct(id: string): Promise<DigitalProduct | null> {
         .single();
 
     if (error || !product) {
+        console.log('[DigitalProduct] Error fetching product:', error?.message);
         return null;
     }
 
     // Sort media by display_order
     product.media = product.media?.sort((a: any, b: any) => a.display_order - b.display_order) || [];
 
+    // Normalize checkout_form - Supabase may return it as array for FK relations
+    if (Array.isArray(product.checkout_form)) {
+        product.checkout_form = product.checkout_form[0] || null;
+    }
+
+    console.log('[DigitalProduct] Loaded product:', product.id, 'checkout_form:', product.checkout_form?.id);
+
     return product;
 }
 
 // Server-side form fields fetching
 async function getFormFields(formId: string): Promise<{ fields: Field[], settings: any }> {
+    console.log('[DigitalProduct] Fetching form fields for form:', formId);
+
     const { data: form, error } = await supabase
         .from('forms')
         .select(`
@@ -86,8 +96,11 @@ async function getFormFields(formId: string): Promise<{ fields: Field[], setting
         .single();
 
     if (error || !form) {
+        console.log('[DigitalProduct] Error fetching form fields:', error?.message);
         return { fields: [], settings: {} };
     }
+
+    console.log('[DigitalProduct] Form found, fields count:', form.fields?.length || 0);
 
     // Ensure fields have step_number
     const fieldsWithSteps = (form.fields || []).map((f: Field) => ({

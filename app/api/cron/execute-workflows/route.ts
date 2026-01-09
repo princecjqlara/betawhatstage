@@ -14,6 +14,9 @@ export async function GET(req: Request) {
         // Only check auth if CRON_SECRET is set (production)
         if (cronSecret && authHeader !== `Bearer ${cronSecret}`) {
             console.log('Unauthorized cron request');
+            console.log('CRON_SECRET present:', !!cronSecret);
+            console.log('Auth header present:', !!authHeader);
+            console.log('Auth header matches:', authHeader === `Bearer ${cronSecret}`);
             return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
         }
 

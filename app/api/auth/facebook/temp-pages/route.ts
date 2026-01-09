@@ -10,11 +10,13 @@ export async function GET(request: Request) {
         return NextResponse.json({ error: 'No session ID provided' }, { status: 400 });
     }
 
-    const pages = retrieveAuthSession(sessionId);
+    const pages = await retrieveAuthSession(sessionId);
 
     if (!pages) {
+        console.log(`[temp-pages] Session not found or expired for session_id: ${sessionId}`);
         return NextResponse.json({ error: 'Session expired or not found' }, { status: 404 });
     }
 
+    console.log(`[temp-pages] Retrieved ${pages.length} pages for session_id: ${sessionId}`);
     return NextResponse.json({ pages });
 }

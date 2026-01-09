@@ -125,8 +125,8 @@ export async function GET(req: Request) {
             picture: page.picture?.data?.url || null,
         }));
 
-        // Store pages in server-side session (avoids cookie size limits)
-        const sessionId = storeAuthSession(pagesPayload);
+        // Store pages in database session (works in serverless environments)
+        const sessionId = await storeAuthSession(pagesPayload);
         console.log(`Stored ${pagesPayload.length} pages in session: ${sessionId}`);
 
         const redirectUrl = new URL(returnTo, process.env.NEXT_PUBLIC_BASE_URL || 'http://localhost:3000');

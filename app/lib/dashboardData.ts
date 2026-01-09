@@ -287,7 +287,8 @@ async function fetchStatusUncached(): Promise<DashboardStatus | null> {
             .select('id, setup_completed')
             .single();
 
-        const hasStore = !storeError && !!storeSettings;
+        // hasStore is true only if record exists AND setup_completed is true
+        const hasStore = !storeError && !!storeSettings && storeSettings.setup_completed === true;
 
         const { count: facebookCount, error: fbError } = await supabase
             .from('connected_pages')

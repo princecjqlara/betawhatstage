@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { parseDocument, chunkDocument, isFileTypeSupported, ChunkedDocument } from '@/app/lib/documentParserService';
 import { addDocument } from '@/app/lib/rag';
-import { supabase } from '@/app/lib/supabase';
+import { createClient, getCurrentUserId } from '@/app/lib/supabaseServer';
 
 /**
  * POST /api/knowledge/upload-document
@@ -11,6 +11,18 @@ import { supabase } from '@/app/lib/supabase';
  */
 export async function POST(req: Request) {
     try {
+        // Get current user for authentication
+        const userId = await getCurrentUserId();
+
+        if (!userId) {
+            return NextResponse.json(
+                { error: 'Unauthorized' },
+                { status: 401 }
+            );
+        }
+
+        const supabase = await createClient();
+
         const formData = await req.formData();
         const file = formData.get('file') as File;
         const categoryId = formData.get('categoryId') as string | null;
@@ -39,6 +51,7 @@ export async function POST(req: Request) {
                 file_size_bytes: file.size,
                 status: 'processing',
                 category_id: categoryId || null,
+                user_id: userId,
             })
             .select()
             .single();
@@ -49,6 +62,7 @@ export async function POST(req: Request) {
         }
 
         const sourceId = sourceRecord?.id;
+
 
         try {
             // Convert file to buffer
@@ -71,7 +85,7 @@ export async function POST(req: Request) {
                 const success = await addDocument(chunk, {
                     categoryId: categoryId || undefined,
                     sourceType: 'file_upload',
-                    // Store source tracking info in metadata
+                    userId: userId,
                 });
 
                 if (success) {
